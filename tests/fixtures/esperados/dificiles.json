@@ -1,0 +1,95 @@
+{
+  "_nota": "Calculado desde la definicion de los datos del generador. 'fila_encabezado' es 1-based contando todas las filas del archivo (la fila vacia cuenta). 'grupos_por_clave_normalizada' agrupa las claves con strip + casefold; 'grupos_sin_ceros_a_la_izquierda' ademas saca los ceros a la izquierda.",
+  "principal_claves_duplicadas.csv": {
+    "fila_encabezado": 1,
+    "filas_de_datos": 8,
+    "columna_clave": "Clave",
+    "claves_duplicadas": {
+      "C001": 2,
+      "C003": 3
+    },
+    "claves_distintas": 5
+  },
+  "claves_sucias": {
+    "archivos": [
+      "claves_sucias.csv",
+      "claves_sucias.xlsx"
+    ],
+    "fila_encabezado": 1,
+    "filas_de_datos": 12,
+    "columna_clave": "Clave",
+    "claves_distintas_sin_normalizar": 12,
+    "grupos_por_clave_normalizada": {
+      "peña": [
+        "  Peña ",
+        "PEÑA",
+        "peña"
+      ],
+      "00123": [
+        "00123"
+      ],
+      "123": [
+        "123"
+      ],
+      "0123": [
+        "0123"
+      ],
+      "ñandú": [
+        "Ñandú",
+        "ÑANDÚ"
+      ],
+      "núñez": [
+        "Núñez ",
+        "núñez"
+      ],
+      "abc-01": [
+        "ABC-01",
+        "abc-01 "
+      ]
+    },
+    "grupos_sin_ceros_a_la_izquierda": {
+      "peña": [
+        "  Peña ",
+        "PEÑA",
+        "peña"
+      ],
+      "123": [
+        "00123",
+        "123",
+        "0123"
+      ],
+      "ñandú": [
+        "Ñandú",
+        "ÑANDÚ"
+      ],
+      "núñez": [
+        "Núñez ",
+        "núñez"
+      ],
+      "abc-01": [
+        "ABC-01",
+        "abc-01 "
+      ]
+    }
+  },
+  "con_basura.csv": {
+    "fila_encabezado": 4,
+    "filas_basura_antes_del_encabezado": 3,
+    "columnas": [
+      "Código",
+      "Nombre",
+      "Importe"
+    ],
+    "filas_de_datos": 6
+  },
+  "con_basura.xlsx": {
+    "fila_encabezado": 4,
+    "filas_basura_antes_del_encabezado": 3,
+    "columnas": [
+      "Código",
+      "Nombre",
+      "Importe"
+    ],
+    "filas_de_datos": 6
+  }
+}

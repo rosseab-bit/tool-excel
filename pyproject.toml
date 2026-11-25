@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "excel-tool"
+dynamic = ["version"]
+description = "Excel Join Tool: explorar, unir, concatenar y dividir archivos CSV y Excel"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas",
+    "python-calamine",
+    "openpyxl",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "xlwt"]
+build = ["pyinstaller"]
+
+[project.scripts]
+excel-tool = "excel_tool.app_entry:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "excel_tool.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+excel_tool = ["limites_default.json", "assets/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["pantalla: necesita pantalla (tkinter); en Linux sin pantalla se corre con xvfb-run"]

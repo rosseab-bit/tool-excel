@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "excel":         {"max_rows": 1048576, "max_columns": 16384, "comfortable_rows": 300000, "comfortable_mb": 50},
+  "google_sheets": {"max_cells": 20000000, "max_import_mb": 100, "comfortable_cells": 5000000, "comfortable_mb": 50}
+}

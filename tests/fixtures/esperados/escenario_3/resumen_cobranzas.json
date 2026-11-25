@@ -1,0 +1,118 @@
+{
+  "_nota": "Calculado desde la definicion de los datos. Las claves son el ID real del cliente (ya sin ceros ni espacios); en el archivo la clave aparece como '00012' o ' 12 '. Solo aparecen clientes con cobranzas.",
+  "por_cliente": {
+    "1": {
+      "filas": 3,
+      "suma_monto": "7376.00"
+    },
+    "2": {
+      "filas": 1,
+      "suma_monto": "3399.84"
+    },
+    "4": {
+      "filas": 1,
+      "suma_monto": "1382.97"
+    },
+    "5": {
+      "filas": 1,
+      "suma_monto": "1146.33"
+    },
+    "6": {
+      "filas": 3,
+      "suma_monto": "6127.18"
+    },
+    "7": {
+      "filas": 2,
+      "suma_monto": "7368.73"
+    },
+    "8": {
+      "filas": 1,
+      "suma_monto": "805.29"
+    },
+    "9": {
+      "filas": 3,
+      "suma_monto": "2076.44"
+    },
+    "10": {
+      "filas": 2,
+      "suma_monto": "1650.88"
+    },
+    "11": {
+      "filas": 2,
+      "suma_monto": "8917.09"
+    },
+    "12": {
+      "filas": 3,
+      "suma_monto": "5100.71"
+    },
+    "13": {
+      "filas": 3,
+      "suma_monto": "7230.33"
+    },
+    "14": {
+      "filas": 4,
+      "suma_monto": "11003.95"
+    },
+    "15": {
+      "filas": 3,
+      "suma_monto": "6612.98"
+    },
+    "16": {
+      "filas": 2,
+      "suma_monto": "4526.71"
+    },
+    "18": {
+      "filas": 1,
+      "suma_monto": "3066.62"
+    },
+    "19": {
+      "filas": 2,
+      "suma_monto": "2676.39"
+    },
+    "20": {
+      "filas": 2,
+      "suma_monto": "2908.46"
+    },
+    "21": {
+      "filas": 3,
+      "suma_monto": "3466.13"
+    },
+    "23": {
+      "filas": 4,
+      "suma_monto": "9081.85"
+    },
+    "24": {
+      "filas": 4,
+      "suma_monto": "8522.86"
+    },
+    "25": {
+      "filas": 2,
+      "suma_monto": "2019.58"
+    },
+    "26": {
+      "filas": 2,
+      "suma_monto": "3147.74"
+    },
+    "27": {
+      "filas": 3,
+      "suma_monto": "6037.47"
+    },
+    "28": {
+      "filas": 2,
+      "suma_monto": "6760.00"
+    },
+    "29": {
+      "filas": 3,
+      "suma_monto": "11520.68"
+    },
+    "30": {
+      "filas": 3,
+      "suma_monto": "10882.07"
+    },
+    "77": {
+      "filas": 2,
+      "suma_monto": "5409.74"
+    }
+  },
+  "filas_total": 67
+}

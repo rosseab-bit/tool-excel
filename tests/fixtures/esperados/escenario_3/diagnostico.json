@@ -1,0 +1,108 @@
+{
+  "_nota": "Principal = clientes.xlsx (30 clientes, 1 fila cada uno). Union tipo 'left': cada cliente aparece al menos una vez. 'filas_resultado_detalle' = suma por cliente de max(1, filas en el secundario). La limpieza de claves con ceros a la izquierda se decide en la Fase 4, por eso cobranzas tiene dos variantes: 'solo_recortar_espacios' (strip: '00012' no coincide con '12') y 'sin_ceros_a_la_izquierda' (strip y sacar ceros). Las filas 'ventas_detalle_y_cobranzas_detalle' muestran la multiplicacion: por cliente, filas de ventas por filas de cobranzas. Con las dos en resumen, el resultado tiene las mismas filas que el principal.",
+  "ventas": {
+    "claves_principal": 30,
+    "claves_con_coincidencia": 27,
+    "claves_sin_coincidencia": [
+      "5",
+      "17",
+      "28"
+    ],
+    "claves_del_secundario_sin_pareja": [
+      "98",
+      "99"
+    ],
+    "claves_repetidas_en_principal": [],
+    "claves_con_varias_filas_en_secundario": 22,
+    "filas_secundario": 87,
+    "filas_resultado_detalle": 88
+  },
+  "cobranzas": {
+    "solo_recortar_espacios": {
+      "claves_principal": 30,
+      "claves_con_coincidencia": 5,
+      "claves_sin_coincidencia": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "22",
+        "24",
+        "25",
+        "26",
+        "28",
+        "29",
+        "30"
+      ],
+      "claves_del_secundario_sin_pareja": [
+        "00001",
+        "00002",
+        "00004",
+        "00005",
+        "00006",
+        "00007",
+        "00009",
+        "00010",
+        "00011",
+        "00012",
+        "00013",
+        "00014",
+        "00015",
+        "00016",
+        "00018",
+        "00019",
+        "00020",
+        "00021",
+        "00023",
+        "00024",
+        "00025",
+        "00026",
+        "00027",
+        "00028",
+        "00029",
+        "00030",
+        "00077"
+      ],
+      "claves_repetidas_en_principal": [],
+      "claves_con_varias_filas_en_secundario": 1,
+      "filas_secundario": 67,
+      "filas_resultado_detalle": 31,
+      "filas_resultado_ventas_detalle_y_cobranzas_detalle": 91,
+      "filas_resultado_ventas_detalle_y_cobranzas_resumen": 88,
+      "filas_resultado_ventas_resumen_y_cobranzas_resumen": 30
+    },
+    "sin_ceros_a_la_izquierda": {
+      "claves_principal": 30,
+      "claves_con_coincidencia": 27,
+      "claves_sin_coincidencia": [
+        "3",
+        "17",
+        "22"
+      ],
+      "claves_del_secundario_sin_pareja": [
+        "77"
+      ],
+      "claves_repetidas_en_principal": [],
+      "claves_con_varias_filas_en_secundario": 22,
+      "filas_secundario": 67,
+      "filas_resultado_detalle": 68,
+      "filas_resultado_ventas_detalle_y_cobranzas_detalle": 210,
+      "filas_resultado_ventas_detalle_y_cobranzas_resumen": 88,
+      "filas_resultado_ventas_resumen_y_cobranzas_resumen": 30
+    }
+  }
+}

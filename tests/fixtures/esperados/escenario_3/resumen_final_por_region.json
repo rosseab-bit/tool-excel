@@ -1,0 +1,18 @@
+{
+  "_nota": "Ventas en resumen (suma de importes validos por cliente) unidas a clientes.xlsx y sumadas por Region. Los clientes sin ventas suman 0. Las ventas de IDs que no estan en clientes se excluyen (union left) y se informan aparte.",
+  "total_importe_por_region": {
+    "Centro": "83999.71",
+    "Cuyo": "65110.13",
+    "Litoral": "82452.60",
+    "Norte": "32814.11",
+    "Sur": "59607.71"
+  },
+  "clientes_por_region": {
+    "Centro": 7,
+    "Cuyo": 6,
+    "Litoral": 9,
+    "Norte": 3,
+    "Sur": 5
+  },
+  "importe_excluido_ids_fuera_de_clientes": "8155.88"
+}

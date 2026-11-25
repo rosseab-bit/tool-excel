@@ -1,0 +1,239 @@
+{
+  "_nota": "Calculado desde la definicion de los datos del generador. Las claves son los ID tal como estan en ventas.csv (solo aparecen clientes con ventas). 'suma_importe' suma solo los importes validos (punto decimal, sin pasar por float). 'importes_invalidos' son los que no se pueden convertir (texto, vacio, '12,34,5'). 'ultima_fecha' mira todas las filas del cliente (dd/mm/aaaa). 'fila' es la fila de datos (1 = primera sin encabezado); 'fila_en_archivo' cuenta el encabezado. 'ids_fuera_de_clientes' son ventas de IDs que no estan en clientes.xlsx.",
+  "por_cliente": {
+    "1": {
+      "filas": 1,
+      "suma_importe": "922.24",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "08/02/2024"
+    },
+    "2": {
+      "filas": 1,
+      "suma_importe": "3431.83",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "20/02/2024"
+    },
+    "3": {
+      "filas": 2,
+      "suma_importe": "9505.97",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "07/05/2024"
+    },
+    "4": {
+      "filas": 1,
+      "suma_importe": "3985.72",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "09/04/2024"
+    },
+    "6": {
+      "filas": 1,
+      "suma_importe": "767.76",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "05/03/2024"
+    },
+    "7": {
+      "filas": 3,
+      "suma_importe": "17097.46",
+      "importes_invalidos": 1,
+      "articulos_distintos": 2,
+      "ultima_fecha": "21/06/2024"
+    },
+    "8": {
+      "filas": 5,
+      "suma_importe": "18788.44",
+      "importes_invalidos": 1,
+      "articulos_distintos": 4,
+      "ultima_fecha": "15/06/2024"
+    },
+    "9": {
+      "filas": 5,
+      "suma_importe": "17160.60",
+      "importes_invalidos": 0,
+      "articulos_distintos": 5,
+      "ultima_fecha": "05/06/2024"
+    },
+    "10": {
+      "filas": 5,
+      "suma_importe": "22365.49",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "19/06/2024"
+    },
+    "11": {
+      "filas": 3,
+      "suma_importe": "11281.79",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "06/05/2024"
+    },
+    "12": {
+      "filas": 3,
+      "suma_importe": "11113.46",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "09/06/2024"
+    },
+    "13": {
+      "filas": 3,
+      "suma_importe": "15701.77",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "13/05/2024"
+    },
+    "14": {
+      "filas": 5,
+      "suma_importe": "18252.83",
+      "importes_invalidos": 0,
+      "articulos_distintos": 5,
+      "ultima_fecha": "19/06/2024"
+    },
+    "15": {
+      "filas": 2,
+      "suma_importe": "9466.89",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "14/03/2024"
+    },
+    "16": {
+      "filas": 5,
+      "suma_importe": "21700.65",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "20/06/2024"
+    },
+    "18": {
+      "filas": 2,
+      "suma_importe": "3505.50",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "10/05/2024"
+    },
+    "19": {
+      "filas": 3,
+      "suma_importe": "3012.94",
+      "importes_invalidos": 1,
+      "articulos_distintos": 3,
+      "ultima_fecha": "07/05/2024"
+    },
+    "20": {
+      "filas": 4,
+      "suma_importe": "15815.13",
+      "importes_invalidos": 1,
+      "articulos_distintos": 2,
+      "ultima_fecha": "17/05/2024"
+    },
+    "21": {
+      "filas": 3,
+      "suma_importe": "9338.80",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "13/06/2024"
+    },
+    "22": {
+      "filas": 3,
+      "suma_importe": "10809.19",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "16/02/2024"
+    },
+    "23": {
+      "filas": 1,
+      "suma_importe": "52.48",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "31/05/2024"
+    },
+    "24": {
+      "filas": 5,
+      "suma_importe": "19036.47",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "29/04/2024"
+    },
+    "25": {
+      "filas": 4,
+      "suma_importe": "19170.12",
+      "importes_invalidos": 0,
+      "articulos_distintos": 4,
+      "ultima_fecha": "21/05/2024"
+    },
+    "26": {
+      "filas": 5,
+      "suma_importe": "25595.88",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "24/05/2024"
+    },
+    "27": {
+      "filas": 3,
+      "suma_importe": "11417.38",
+      "importes_invalidos": 0,
+      "articulos_distintos": 3,
+      "ultima_fecha": "08/06/2024"
+    },
+    "29": {
+      "filas": 5,
+      "suma_importe": "16290.37",
+      "importes_invalidos": 0,
+      "articulos_distintos": 4,
+      "ultima_fecha": "04/06/2024"
+    },
+    "30": {
+      "filas": 2,
+      "suma_importe": "8397.10",
+      "importes_invalidos": 0,
+      "articulos_distintos": 2,
+      "ultima_fecha": "10/04/2024"
+    },
+    "98": {
+      "filas": 1,
+      "suma_importe": "7378.79",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "07/02/2024"
+    },
+    "99": {
+      "filas": 1,
+      "suma_importe": "777.09",
+      "importes_invalidos": 0,
+      "articulos_distintos": 1,
+      "ultima_fecha": "27/05/2024"
+    }
+  },
+  "celdas_invalidas": [
+    {
+      "fila": 2,
+      "fila_en_archivo": 3,
+      "id_cliente": "20",
+      "valor": "n/a"
+    },
+    {
+      "fila": 48,
+      "fila_en_archivo": 49,
+      "id_cliente": "7",
+      "valor": ""
+    },
+    {
+      "fila": 78,
+      "fila_en_archivo": 79,
+      "id_cliente": "8",
+      "valor": "12,34,5"
+    },
+    {
+      "fila": 82,
+      "fila_en_archivo": 83,
+      "id_cliente": "19",
+      "valor": "abc"
+    }
+  ],
+  "ids_fuera_de_clientes": [
+    "99",
+    "98"
+  ],
+  "filas_total": 87
+}

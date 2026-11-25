@@ -1,0 +1,54 @@
+{
+  "_nota": "Calculado desde la definicion de los datos del generador, sin leer los archivos. 'detalle_left' = filas de un resultado en detalle con clientes como principal: las ventas de la region mas un fila por cada cliente sin ventas. Todos los clientes habilitados venden al menos una vez; el 10% (posicion % 10 == 9 dentro de su region) nunca vende. Los limites salen de limites_default.json (Excel).",
+  "limites_excel": {
+    "max_rows": 1048576,
+    "comfortable_rows": 300000
+  },
+  "filas": {
+    "clientes_grande.csv": 200000,
+    "ventas_grande.csv": 2500000,
+    "rendimiento_2M.csv": 2000000,
+    "rendimiento_500k.xlsx": 500000
+  },
+  "clientes_por_region": {
+    "Norte": 80032,
+    "Sur": 30126,
+    "Centro": 29907,
+    "Cuyo": 29773,
+    "Litoral": 30162
+  },
+  "ventas_por_region": {
+    "Norte": 1400000,
+    "Sur": 275000,
+    "Centro": 275000,
+    "Cuyo": 275000,
+    "Litoral": 275000
+  },
+  "clientes_sin_ventas": {
+    "total": 19998,
+    "por_region": {
+      "Norte": 8003,
+      "Sur": 3012,
+      "Centro": 2990,
+      "Cuyo": 2977,
+      "Litoral": 3016
+    }
+  },
+  "detalle_left": {
+    "total": 2519998,
+    "por_region": {
+      "Norte": 1408003,
+      "Sur": 278012,
+      "Centro": 277990,
+      "Cuyo": 277977,
+      "Litoral": 278016
+    }
+  },
+  "regiones_que_superan_el_maximo_de_filas_de_excel": [
+    "Norte"
+  ],
+  "regiones_que_superan_el_limite_comodo_de_excel": [
+    "Norte"
+  ],
+  "total_detalle_supera_el_maximo_de_excel": true
+}

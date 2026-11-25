@@ -1,0 +1,159 @@
+{
+  "_nota": "Los nombres de campos siguen el borrador de PLAN seccion 2 y se ajustan en la Fase 2. Calculado desde la definicion de los datos del generador, no leyendo el archivo. 'filas' cuenta las filas de datos (sin encabezado). 'filas_repetidas' son copias exactas de una fila anterior no vacia; las filas totalmente vacias se cuentan aparte en 'filas_vacias'. 'distintos' cuenta valores no vacios tal cual estan escritos (sin recortar espacios ni unificar mayusculas). 'vacios' incluye las filas totalmente vacias.",
+  "archivos": [
+    "explorar/para_explorar.csv",
+    "explorar/para_explorar.xlsx"
+  ],
+  "filas": 200,
+  "columnas": 13,
+  "filas_vacias": 4,
+  "filas_repetidas": 8,
+  "columnas_detalle": [
+    {
+      "nombre": "ID",
+      "posicion": 1,
+      "letra": "A",
+      "tipo": "entero",
+      "vacios": 4,
+      "distintos": 188,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Importe",
+      "posicion": 2,
+      "letra": "B",
+      "tipo": "decimal",
+      "vacios": 10,
+      "distintos": 182,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Fecha",
+      "posicion": 3,
+      "letra": "C",
+      "tipo": "fecha",
+      "vacios": 16,
+      "distintos": 148,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 52,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Fecha y hora",
+      "posicion": 4,
+      "letra": "D",
+      "tipo": "fecha_hora",
+      "vacios": 4,
+      "distintos": 188,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 53,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Activo",
+      "posicion": 5,
+      "letra": "E",
+      "tipo": "si_no",
+      "vacios": 18,
+      "distintos": 2,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Descripción",
+      "posicion": 6,
+      "letra": "F",
+      "tipo": "texto",
+      "vacios": 4,
+      "distintos": 47,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Código",
+      "posicion": 7,
+      "letra": "G",
+      "tipo": "texto",
+      "vacios": 4,
+      "distintos": 187,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 196,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Mixta",
+      "posicion": 8,
+      "letra": "H",
+      "tipo": "mixto",
+      "vacios": 4,
+      "distintos": 153,
+      "desglose_tipos": {
+        "entero": 158,
+        "texto": 38
+      },
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Vacía",
+      "posicion": 9,
+      "letra": "I",
+      "tipo": "vacia",
+      "vacios": 200,
+      "distintos": 0,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "",
+      "posicion": 10,
+      "letra": "J",
+      "tipo": "texto",
+      "vacios": 60,
+      "distintos": 5,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Total",
+      "posicion": 11,
+      "letra": "K",
+      "tipo": "entero",
+      "vacios": 4,
+      "distintos": 159,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Total",
+      "posicion": 12,
+      "letra": "L",
+      "tipo": "decimal",
+      "vacios": 4,
+      "distintos": 188,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 0
+    },
+    {
+      "nombre": "Región",
+      "posicion": 13,
+      "letra": "M",
+      "tipo": "texto",
+      "vacios": 4,
+      "distintos": 6,
+      "desglose_tipos": null,
+      "ceros_a_la_izquierda": 0,
+      "con_espacios_en_los_bordes": 33
+    }
+  ]
+}

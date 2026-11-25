@@ -47,7 +47,7 @@ Plan completo: `PLAN.md`. Equipo y flujo de trabajo: `docs/equipo.md`.
 - Todo lo que depende del sistema (carpetas de usuario, abrir carpeta, nombres de archivo válidos en Windows) va SOLO en `src/excel_tool/platform_utils.py`. Ningún otro módulo pregunta `sys.platform`.
 - La app nunca escribe a stdout/stderr (en el `.exe` no hay consola): loguear a archivo.
 - Archivos propios (ícono, límites) con `importlib.resources.files("excel_tool")`, nunca `sys._MEIPASS`.
-- Fuentes de tkinter genéricas (`TkDefaultFont`). Nada de comandos de sistema con `subprocess`.
+- Fuentes de tkinter genéricas (`TkDefaultFont`). Nada de comandos de sistema con `subprocess` (única excepción: `xdg-open` en `platform_utils.open_folder`, ADR-012).
 - Scripts `.sh` con LF; `.ps1` y `.bat` con CRLF (lo fija `.gitattributes`).
 
 ## Comandos (Linux)
