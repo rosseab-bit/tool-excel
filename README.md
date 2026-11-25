@@ -6,7 +6,7 @@ El plan está en [`PLAN.md`](PLAN.md) y la forma de trabajo del equipo en [`docs
 
 ## Requisitos
 
-- **Python 3.12 o más nuevo, con tkinter.**
+- **Python 3.12 o más nuevo, con tkinter.** Probado en 3.12 (Linux, versión de desarrollo) y en 3.14 (Windows 11); 3.13 no se probó, pero no está bloqueado. En Windows, el script prefiere 3.12 si está instalado y, si no, usa el más nuevo.
 - **Linux:** `sudo apt install python3-tk python3-venv` (Ubuntu/Debian; la versión de venv puede llamarse `python3.12-venv`). En Fedora: `sudo dnf install python3-tkinter`. Para correr los tests sin pantalla: `sudo apt install xvfb`.
 - **Windows:** instalador de [python.org](https://www.python.org/downloads/), marcando **"tcl/tk and IDLE"** y **"Add python.exe to PATH"** (o usando el launcher `py`, que se instala con él).
 - Los scripts buscan Python solos. Para forzar uno: variable `PYTHON` (ej.: `PYTHON=/usr/bin/python3.12 scripts/dev.sh`).
@@ -41,7 +41,7 @@ Todos los scripts se pueden abrir con doble clic o desde una consola. Usan `-Exe
 | Abrir la app (prepara el entorno si hace falta) | `scripts\dev.bat` |
 | Solo preparar el entorno | `scripts\dev.bat -Setup` |
 | Correr los tests y revisar el código | `scripts\dev.bat -Tests` |
-| Pasarle opciones a la app | `scripts\dev.bat -AppArgs --version` o `-AppArgs --self-test` |
+| Pasarle opciones a la app | `scripts\dev.bat -AppArgs --version` o `-AppArgs --self-test` (las opciones de la app empiezan con `--`; si escribís mal una opción del script, avisa y no hace nada) |
 | Regenerar `constraints.txt` | `scripts\dev.bat -Lock` |
 | Borrar `.venv` y empezar de cero | `scripts\dev.bat -Recreate` |
 | Instalar solo lo necesario para usar la app | `scripts\dev.bat -NoDev` |

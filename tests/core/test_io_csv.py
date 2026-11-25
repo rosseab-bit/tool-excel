@@ -116,7 +116,7 @@ def test_filas_con_mas_campos_que_la_muestra(tmp_path):
 
 def test_campo_entre_comillas_con_separador_y_salto(tmp_path):
     p = tmp_path / "a.csv"
-    p.write_text('A;B\n"x;y";"línea1\nlínea2"\n', encoding="utf-8")
+    p.write_bytes('A;B\n"x;y";"línea1\nlínea2"\n'.encode())
     r = read_csv(p)
     assert r.df.iloc[0].tolist() == ["x;y", "línea1\nlínea2"]
 

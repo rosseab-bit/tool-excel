@@ -127,7 +127,7 @@ def test_mensaje_en_mb(tmp_path, monkeypatch):
 def test_archivo_chico(tmp_path, monkeypatch):
     monkeypatch.setattr(pu, "available_memory", lambda: 4 * GB)
     p = tmp_path / "c.csv"
-    p.write_text("a;b\n1;2\n", encoding="utf-8")
+    p.write_bytes(b"a;b\n1;2\n")
     r = check_memory(p)
     assert r.ok
     assert r.message == ""

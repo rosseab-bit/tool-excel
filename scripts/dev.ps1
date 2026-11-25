@@ -32,9 +32,19 @@ Uso: scripts\dev.bat [opciones]    (o: powershell -File scripts\dev.ps1 [opcione
   -NoDev          Instala solo lo necesario para usar la app
                   (sin pytest, ruff ni pyinstaller)
   -Lock           Regenera constraints.txt con las versiones instaladas
-  -AppArgs <args> Pasa argumentos a la app (ej.: -AppArgs --self-test)
+  -AppArgs <args> Pasa argumentos a la app, que empiezan con -- (ej.: -AppArgs --self-test)
   -Help           Muestra esta ayuda
 '@
+}
+
+# Los argumentos para la app van solo por -AppArgs y empiezan con "--" (ej.: --self-test).
+# Un "-Algo" suelto es una opcion de este script mal escrita: frenar antes de hacer nada.
+$Desconocidas = @($AppArgs | Where-Object { $_ -match '^-[A-Za-z]' })
+if ($Desconocidas.Count -gt 0) {
+    [Console]::Error.WriteLine("ERROR: No conozco la opcion $($Desconocidas[0]). Opciones validas: -Setup, -Tests, -Recreate, -NoDev, -Lock, -Help, -AppArgs <args>.")
+    [Console]::Error.WriteLine("")
+    Mostrar-Ayuda
+    exit 2
 }
 
 if ($Help) { Mostrar-Ayuda; exit 0 }
@@ -89,7 +99,7 @@ if ($env:PYTHON) {
     $PyExe = $env:PYTHON
 } else {
     $candidatos = @(
-        @{ Exe = 'py'; Previos = @('-3.13') },
+        # Se prefiere 3.12 (la version de desarrollo); si no esta, el Python 3 mas nuevo (>= 3.12).
         @{ Exe = 'py'; Previos = @('-3.12') },
         @{ Exe = 'py'; Previos = @('-3') },
         @{ Exe = 'python'; Previos = @() }

@@ -71,7 +71,7 @@ def test_sin_progress_ni_cancel_es_identico(tmp_path: Path) -> None:
 
 def test_csv_cancelado_antes_de_leer(tmp_path: Path) -> None:
     ruta = tmp_path / "c.csv"
-    ruta.write_text("a;b\n1;2\n", encoding="utf-8")
+    ruta.write_bytes(b"a;b\n1;2\n")
     token = CancelToken()
     token.cancel()
     with pytest.raises(Cancelado):
@@ -82,7 +82,7 @@ def test_csv_cancelado_antes_de_leer(tmp_path: Path) -> None:
 
 def test_csv_pequeno_con_nrows_acepta_parametros(tmp_path: Path) -> None:
     ruta = tmp_path / "n.csv"
-    ruta.write_text("a;b\n1;2\n3;4\n", encoding="utf-8")
+    ruta.write_bytes(b"a;b\n1;2\n3;4\n")
     r = read_table(ruta, ReadOptions(nrows=1), progress=lambda e: None, cancel=CancelToken())
     assert len(r.df) == 1
 

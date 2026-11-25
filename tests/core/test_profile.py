@@ -111,7 +111,7 @@ def test_archivo_y_hojas(fixtures_generados):
 
 def _leer(tmp_path: Path, texto: str, ext: str = "csv"):
     ruta = tmp_path / f"t.{ext}"
-    ruta.write_text(texto, encoding="utf-8")
+    ruta.write_bytes((texto).encode("utf-8"))
     return read_table(ruta, ReadOptions())
 
 
@@ -346,10 +346,7 @@ def test_exportar_informe_sin_distintos(origen, tmp_path):
 
 def test_exportar_informe_nombres_de_hoja_raros_y_repetidos(tmp_path):
     csv = tmp_path / "a.csv"
-    csv.write_text(
-        "Una columna/con:nombre*muy?largo[de]verdad ok;General;b\nx;1;y\nx;2;z\n",
-        encoding="utf-8",
-    )
+    csv.write_bytes(b"Una columna/con:nombre*muy?largo[de]verdad ok;General;b\nx;1;y\nx;2;z\n")
     data = read_table(csv)
     perfil = profile_table(data)
     nombre = data.df.columns[0]
@@ -369,7 +366,7 @@ def test_exportar_informe_nombres_de_hoja_raros_y_repetidos(tmp_path):
 
 def test_exportar_informe_avisa_si_la_lista_quedo_cortada(tmp_path):
     csv = tmp_path / "a.csv"
-    csv.write_text("a;b\n" + "".join(f"{i};x\n" for i in range(20)), encoding="utf-8")
+    csv.write_bytes(("a;b\n" + "".join(f"{i};x\n" for i in range(20))).encode("utf-8"))
     data = read_table(csv)
     from excel_tool.core.explore import DistinctOptions
 
@@ -418,7 +415,7 @@ def test_exportar_distintos_csv_ida_y_vuelta(origen, tmp_path):
 
 def test_exportar_distintos_csv_google_usa_punto(tmp_path):
     csv = tmp_path / "a.csv"
-    csv.write_text("a\nx\nx\ny\n", encoding="utf-8")
+    csv.write_bytes(b"a\nx\nx\ny\n")
     d = value_counts(read_table(csv).df, ["a"])
     ruta = tmp_path / "g.csv"
     export_distincts(d, ruta, "csv_google")

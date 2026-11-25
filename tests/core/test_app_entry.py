@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from excel_tool import APP_NAME, __version__, app_entry
+from excel_tool import APP_NAME, __version__, app_entry, platform_utils
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +44,9 @@ def test_log_a_archivo(tmp_path):
     app_entry.main(["--version"])
     for h in app_entry.logger.handlers:
         h.flush()
-    logs = list((tmp_path / "xdg" / "ExcelJoinTool" / "logs").glob("excel_tool.log"))
+    carpeta = platform_utils.log_dir()
+    assert tmp_path in carpeta.parents  # el entorno de prueba esta aislado
+    logs = list(carpeta.glob("excel_tool.log"))
     assert logs
     assert __version__ in logs[0].read_text(encoding="utf-8")
 
