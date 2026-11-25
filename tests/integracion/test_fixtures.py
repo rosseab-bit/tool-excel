@@ -157,7 +157,7 @@ def test_generar_dos_veces_da_lo_mismo(generador_fixtures, tmp_path):
     assert archivos == sorted(p.relative_to(b) for p in b.rglob("*") if p.is_file())
     assert len(archivos) >= 9
     for rel in archivos:
-        if rel.suffix in {".csv", ".txt", ".json", ""}:
+        if rel.suffix in {".csv", ".txt", ".json", ""} or rel.name == "danado.xlsx":
             assert (a / rel).read_bytes() == (b / rel).read_bytes(), rel
         else:
             if rel.suffix == ".xlsx":

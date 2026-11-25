@@ -149,6 +149,26 @@ Fuera de alcance: join.py, UI.
 - ...
 ```
 
+### 4.4 Registro de avance (para no perder trabajo si un agente se queda sin contexto)
+
+Un agente que se corta a mitad de una tarea no llega a mandar su informe. Para que otro pueda continuar, cada tarea de código lleva un **registro de avance** (ADR-020).
+
+- **Dónde:** `docs/progreso/<ID>.md` (ej. `docs/progreso/F1-02.md`). Mientras el hook no habilite esa carpeta a los agentes, el despacho indica una ruta alternativa en la carpeta temporal de la sesión.
+- **Al empezar:** si el registro ya existe, es una continuación: leerlo primero y seguir desde "Próximo paso", sin rehacer lo hecho.
+- **Cuándo actualizarlo:** al terminar cada subpaso (un módulo, un grupo de tests que pasa) y antes de cualquier comando largo.
+- **Cortar a tiempo:** si el agente ya trabajó mucho y falta bastante, corta en un punto estable (lo hecho con tests pasando, registro al día) y termina con estado `PARCIAL`. El líder despacha un **agente nuevo** que continúa desde el registro.
+- **Al aprobar la tarea:** el líder borra el registro (lo que importa queda en el informe y en git).
+
+```
+# <ID> — <título>
+## Estado: EN CURSO | PARCIAL | TERMINADO
+## Hecho (con archivos)
+## Pendiente (en orden)
+## Próximo paso (concreto: archivo, función, test)
+## Decisiones de nivel 1 tomadas
+## Cómo verificar lo hecho (comandos)
+```
+
 ---
 
 ## 5. Configuración (`.claude/`)
@@ -172,6 +192,7 @@ Fuera de alcance: join.py, UI.
 
 - **Opus cuesta más por token** que Sonnet. Por eso el líder trabaja con effort medio, no lee código y se apoya en los informes. El grueso de los tokens (código, tests, lecturas) va en Sonnet.
 - Conviene **una sesión del líder por fase**. El estado queda en git, `docs/decisiones.md`, `docs/qa/` y la lista de tareas.
+- **Contexto de los agentes:** cada tarea grande va a un **agente nuevo** (arranca con contexto vacío y es más barato que reanudar uno con mucho historial). Reanudar con `SendMessage` solo para correcciones chicas de la misma tarea. Los despachos citan secciones puntuales de `PLAN.md`; los agentes buscan con grep antes de abrir archivos enteros y corren los tests con `-q`. Ver el registro de avance (§4.4).
 - Si los agentes de Sonnet se traban seguido en algo difícil (por ejemplo, el join multi-archivo o la estimación de tamaño), el líder puede proponerte (nivel 3) subir el effort de ese agente para esa tarea.
 
 ---

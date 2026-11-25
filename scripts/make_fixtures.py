@@ -1129,6 +1129,266 @@ def grupo_rendimiento(salida: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Grupo: fase1 (tipos de celda de Excel, CSV raros, archivos rotos) + fase1.json
+# ---------------------------------------------------------------------------
+
+FECHAS_F1 = [dt.date(2024, 3, 5), dt.datetime(2023, 12, 31), dt.date(2024, 1, 1)]
+FECHAS_HORA_F1 = [
+    dt.datetime(2024, 3, 5, 14, 30, 15),
+    dt.datetime(2023, 12, 31, 0, 0, 1),
+    dt.datetime(2024, 1, 1, 23, 59, 59),
+]
+ENCABEZADO_TIPOS = [
+    "Entero",
+    "Decimal",
+    "Fecha",
+    "FechaHora",
+    "Booleano",
+    "Formula",
+    "Error",
+    "Texto",
+]
+
+
+def _fijar_zip(origen: Path, reemplazos: dict[str, list[tuple[str, str]]]) -> None:
+    """Reescribe un .xlsx con fechas fijas en el zip y reemplazos de texto en sus partes
+    (openpyxl no guarda el valor calculado de las fórmulas: se lo agregamos a mano)."""
+    with zipfile.ZipFile(origen) as z:
+        partes = [(i.filename, z.read(i.filename)) for i in z.infolist()]
+    with zipfile.ZipFile(origen, "w", zipfile.ZIP_DEFLATED) as z:
+        for nombre, datos in partes:
+            for viejo, nuevo in reemplazos.get(nombre, []):
+                texto = datos.decode("utf-8")
+                if viejo not in texto:
+                    raise ValueError(f"No está {viejo!r} en {nombre}")
+                datos = texto.replace(viejo, nuevo).encode("utf-8")
+            info = zipfile.ZipInfo(nombre, date_time=(2024, 6, 1, 12, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, datos)
+
+
+def generar_excel_tipos_xlsx(destino: Path) -> None:
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill
+
+    wb = Workbook()
+    wb.properties.creator = "make_fixtures"
+    wb.properties.created = FECHA_FIJA
+    wb.properties.modified = FECHA_FIJA
+    ws = wb.active
+    ws.title = "Tipos"
+    ws.append(ENCABEZADO_TIPOS)
+    ws.append([100, 1234.56, FECHAS_F1[0], FECHAS_HORA_F1[0], True, "=A2+1", "#N/A", "a"])
+    ws.append([0, 0.5, FECHAS_F1[1], FECHAS_HORA_F1[1], False, "=A3+1", None, "b"])
+    ws.append([-5, -2.25, FECHAS_F1[2], FECHAS_HORA_F1[2], True, "=NA()", None, "c"])
+    ws.append([1048577, 0.001, None, None, None, None, None, None])
+    for fila in (2, 3, 4):
+        ws.cell(fila, 3).number_format = "dd/mm/yyyy"
+        ws.cell(fila, 4).number_format = "dd/mm/yyyy hh:mm:ss"
+    ws.merge_cells("H2:H3")  # Texto: "a" ocupa 2 filas (la segunda queda vacía)
+    ws.merge_cells("G3:G4")  # Error: dos celdas vacías combinadas
+    ws2 = wb.create_sheet("Con vacias")
+    ws2.append(["A", "B"])
+    ws2.append(["x", 1])
+    ws2.append(["y", 2])
+    for fila in (4, 5, 6):  # filas "con formato" pero sin datos, al final
+        for col in (1, 2):
+            ws2.cell(fila, col).fill = PatternFill("solid", fgColor="DDDDDD")
+    wb.save(destino)
+    _fijar_zip(
+        destino,
+        {
+            "xl/worksheets/sheet1.xml": [
+                ('<c r="F2"><f>A2+1</f><v /></c>', '<c r="F2"><f>A2+1</f><v>101</v></c>'),
+                ('<c r="F3"><f>A3+1</f><v /></c>', '<c r="F3"><f>A3+1</f><v>1</v></c>'),
+                (
+                    '<c r="F4"><f>NA()</f><v /></c>',
+                    '<c r="F4" t="e"><f>NA()</f><v>#N/A</v></c>',
+                ),
+            ]
+        },
+    )
+
+
+def generar_excel_tipos_xls(destino: Path) -> None:
+    import xlwt
+
+    wb = xlwt.Workbook(encoding="utf-8")
+    ws = wb.add_sheet("Tipos")
+    estilo_fecha = xlwt.easyxf(num_format_str="DD/MM/YYYY")
+    estilo_hora = xlwt.easyxf(num_format_str="DD/MM/YYYY HH:MM:SS")
+    for c, titulo in enumerate(["Entero", "Decimal", "Fecha", "FechaHora", "Booleano"]):
+        ws.write(0, c, titulo)
+    filas = [
+        (100, 1234.56, dt.date(2024, 3, 5), dt.datetime(2024, 3, 5, 14, 30, 15), True),
+        (0, 0.5, dt.date(2023, 12, 31), dt.datetime(2023, 12, 31, 0, 0, 1), False),
+        (-5, -2.25, dt.date(2024, 1, 1), dt.datetime(2024, 1, 1, 23, 59, 59), True),
+    ]
+    for r, (e, d, f, fh, b) in enumerate(filas, start=1):
+        ws.write(r, 0, e)
+        ws.write(r, 1, d)
+        ws.write(r, 2, f, estilo_fecha)
+        ws.write(r, 3, fh, estilo_hora)
+        ws.write(r, 4, b)
+    wb.save(str(destino))
+
+
+def esperados_fase1() -> dict:
+    """Todo escrito a mano, a partir de las reglas del contrato (no se lee ningún archivo)."""
+    cols_tipos = {
+        "Entero": "entero",
+        "Decimal": "decimal",
+        "Fecha": "fecha",
+        "FechaHora": "fecha_hora",
+        "Booleano": "si_no",
+        "Formula": "entero",
+        "Error": "vacia",
+        "Texto": "texto",
+    }
+    return {
+        "_nota": (
+            "Valores como los devuelve read_table (todo texto): enteros sin '.0' ('100'), "
+            "decimales con punto ('1234.56'), fechas 'dd/mm/aaaa', fecha-hora "
+            "'dd/mm/aaaa hh:mm:ss', booleanos 'VERDADERO'/'FALSO', vacio ''. Errores de "
+            "Excel (#N/A): calamine 0.9.1 los devuelve como '' (no como texto): el esperado "
+            "es ''; el contrato dice '#N/A'. "
+            "'columnas' y 'filas' son lo que debe devolver "
+            "read_table con header_row=None; 'tipos' es el ColumnType que detect_types debe "
+            "dar por columna. 'error' es la clase de core/errors que debe levantar la lectura. "
+            "Formulas: openpyxl no guarda el valor calculado, asi que el generador lo agrega "
+            "al XML (101, 1 y #N/A); el esperado es ese valor. Celdas combinadas: el valor "
+            "queda en la primera celda y las demas leen vacio (''). 'filas_vacias_final' de "
+            "la hoja 'Con vacias': filas en blanco con formato al final, que read_table "
+            "descarta (calamine las puede devolver o no; el archivo las tiene)."
+        ),
+        "excel_tipos.xlsx": {
+            "hoja_principal": "Tipos",
+            "columnas": ENCABEZADO_TIPOS,
+            "filas": [
+                [
+                    "100",
+                    "1234.56",
+                    "05/03/2024",
+                    "05/03/2024 14:30:15",
+                    "VERDADERO",
+                    "101",
+                    "",
+                    "a",
+                ],
+                ["0", "0.5", "31/12/2023", "31/12/2023 00:00:01", "FALSO", "1", "", ""],
+                ["-5", "-2.25", "01/01/2024", "01/01/2024 23:59:59", "VERDADERO", "", "", "c"],
+                ["1048577", "0.001", "", "", "", "", "", ""],
+            ],
+            "tipos": cols_tipos,
+            "celdas_combinadas": ["H2:H3", "G3:G4"],
+            "hojas": {
+                "Tipos": {"filas": 4, "columnas": 8},
+                "Con vacias": {"filas": 2, "columnas": 2, "filas_vacias_final": 3},
+            },
+            "hoja_con_vacias": {
+                "columnas": ["A", "B"],
+                "filas": [["x", "1"], ["y", "2"]],
+            },
+        },
+        "excel_tipos.xls": {
+            "hoja_principal": "Tipos",
+            "columnas": ["Entero", "Decimal", "Fecha", "FechaHora", "Booleano"],
+            "filas": [
+                ["100", "1234.56", "05/03/2024", "05/03/2024 14:30:15", "VERDADERO"],
+                ["0", "0.5", "31/12/2023", "31/12/2023 00:00:01", "FALSO"],
+                ["-5", "-2.25", "01/01/2024", "01/01/2024 23:59:59", "VERDADERO"],
+            ],
+            "tipos": {
+                "Entero": "entero",
+                "Decimal": "decimal",
+                "Fecha": "fecha",
+                "FechaHora": "fecha_hora",
+                "Booleano": "si_no",
+            },
+        },
+        "csv/pipe.csv": {
+            "separador": "|",
+            "encoding": "utf-8",
+            "columnas": ["Código", "Nombre", "Importe"],
+            "filas": [
+                ["00123", "Ñandú Pérez", "1234.56"],
+                ["00124", "José Muñoz", "250.75"],
+                ["00125", "María Núñez", "-5"],
+            ],
+            "tipos": {"Código": "texto", "Nombre": "texto", "Importe": "decimal"},
+        },
+        "csv/estilo_punto.csv": {
+            "separador": ",",
+            "encoding": "utf-8",
+            "columnas": ["Producto", "Precio"],
+            "filas": [
+                ["Tuerca", "1,234.56"],
+                ["Tornillo", "250.75"],
+                ["Arandela", "0.5"],
+            ],
+            "tipos": {"Producto": "texto", "Precio": "decimal"},
+            "decimal_style": ".",
+        },
+        "csv/solo_encabezado.csv": {
+            "separador": ";",
+            "encoding": "utf-8",
+            "columnas": ["Código", "Nombre", "Importe"],
+            "filas": [],
+            "tipos": {"Código": "vacia", "Nombre": "vacia", "Importe": "vacia"},
+        },
+        "csv/vacio.csv": {"error": "ArchivoIlegible", "bytes": 0},
+        "danado.xlsx": {"error": "ArchivoIlegible"},
+    }
+
+
+def grupo_fase1(salida: Path) -> list[str]:
+    generar_excel_tipos_xlsx(ruta_segura(salida, "fase1/excel_tipos.xlsx"))
+    generar_excel_tipos_xls(ruta_segura(salida, "fase1/excel_tipos.xls"))
+    _escribir_csv(
+        ruta_segura(salida, "fase1/csv/pipe.csv"),
+        [
+            ["Código", "Nombre", "Importe"],
+            ["00123", "Ñandú Pérez", "1234.56"],
+            ["00124", "José Muñoz", "250.75"],
+            ["00125", "María Núñez", "-5"],
+        ],
+        "|",
+        "utf-8",
+    )
+    _escribir_csv(
+        ruta_segura(salida, "fase1/csv/estilo_punto.csv"),
+        [
+            ["Producto", "Precio"],
+            ["Tuerca", "1,234.56"],
+            ["Tornillo", "250.75"],
+            ["Arandela", "0.5"],
+        ],
+        ",",
+        "utf-8",
+    )
+    _escribir_csv(
+        ruta_segura(salida, "fase1/csv/solo_encabezado.csv"),
+        [["Código", "Nombre", "Importe"]],
+        ";",
+        "utf-8",
+    )
+    ruta_segura(salida, "fase1/csv/vacio.csv").write_bytes(b"")
+    ruta_segura(salida, "fase1/danado.xlsx").write_bytes(
+        "Esto no es un Excel, es texto suelto: ñandú.\n".encode() * 20
+    )
+    escribir_json(carpeta_de_esperados(salida) / "fase1.json", esperados_fase1())
+    return [
+        "fase1/excel_tipos.xlsx",
+        "fase1/excel_tipos.xls",
+        "fase1/csv/pipe.csv",
+        "fase1/csv/estilo_punto.csv",
+        "fase1/csv/solo_encabezado.csv",
+        "fase1/csv/vacio.csv",
+        "fase1/danado.xlsx",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Registro de grupos (F0-21 y F0-22 suman acá)
 # ---------------------------------------------------------------------------
 
@@ -1139,6 +1399,7 @@ GRUPOS: list[tuple[str, Callable[[Path], list[str]], bool]] = [
     ("explorar", grupo_explorar, False),
     ("escenario_3", grupo_escenario_3, False),
     ("dificiles", grupo_dificiles, False),
+    ("fase1", grupo_fase1, False),
     ("escenario_grande", grupo_escenario_grande, True),
     ("rendimiento", grupo_rendimiento, True),
 ]

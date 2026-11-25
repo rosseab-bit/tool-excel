@@ -64,20 +64,20 @@ def _paso_limites() -> str:
 def _paso_archivos() -> str:
     import pandas as pd
 
+    from excel_tool.core.io import ReadOptions, WriteOptions, read_table, write_table
+
     original = pd.DataFrame({"nombre": ["Ñandú", "acción"], "codigo": ["00123", "00124"]})
     with tempfile.TemporaryDirectory() as tmp:
         carpeta = Path(tmp)
-        csv = carpeta / "prueba.csv"
-        original.to_csv(csv, sep=";", encoding="utf-8-sig", index=False)
-        leido = pd.read_csv(csv, sep=";", encoding="utf-8-sig", dtype=str)
-        if not leido.equals(original):
-            raise ValueError("el CSV no volvió igual")
-        xlsx = carpeta / "prueba.xlsx"
-        original.to_excel(xlsx, index=False, engine="openpyxl")
-        for motor in ("openpyxl", "calamine"):
-            leido = pd.read_excel(xlsx, dtype=str, engine=motor)
-            if not leido.equals(original):
-                raise ValueError(f"el xlsx no volvió igual ({motor})")
+        for formato, nombre in (("csv_excel", "prueba.csv"), ("xlsx", "prueba.xlsx")):
+            ruta = carpeta / nombre
+            write_table(original, ruta, WriteOptions(format=formato))
+            leido = read_table(ruta, ReadOptions(header_row=0)).df
+            if (
+                list(leido.columns) != list(original.columns)
+                or leido.values.tolist() != original.values.tolist()
+            ):
+                raise ValueError(f"{nombre} no volvió igual")
     return "CSV y xlsx escritos y releídos"
 
 

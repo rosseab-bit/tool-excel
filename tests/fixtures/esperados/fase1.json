@@ -1,0 +1,219 @@
+{
+  "_nota": "Valores como los devuelve read_table (todo texto): enteros sin '.0' ('100'), decimales con punto ('1234.56'), fechas 'dd/mm/aaaa', fecha-hora 'dd/mm/aaaa hh:mm:ss', booleanos 'VERDADERO'/'FALSO', vacio ''. Errores de Excel (#N/A): calamine 0.9.1 los devuelve como '' (no como texto): el esperado es ''; el contrato dice '#N/A'. 'columnas' y 'filas' son lo que debe devolver read_table con header_row=None; 'tipos' es el ColumnType que detect_types debe dar por columna. 'error' es la clase de core/errors que debe levantar la lectura. Formulas: openpyxl no guarda el valor calculado, asi que el generador lo agrega al XML (101, 1 y #N/A); el esperado es ese valor. Celdas combinadas: el valor queda en la primera celda y las demas leen vacio (''). 'filas_vacias_final' de la hoja 'Con vacias': filas en blanco con formato al final, que read_table descarta (calamine las puede devolver o no; el archivo las tiene).",
+  "excel_tipos.xlsx": {
+    "hoja_principal": "Tipos",
+    "columnas": [
+      "Entero",
+      "Decimal",
+      "Fecha",
+      "FechaHora",
+      "Booleano",
+      "Formula",
+      "Error",
+      "Texto"
+    ],
+    "filas": [
+      [
+        "100",
+        "1234.56",
+        "05/03/2024",
+        "05/03/2024 14:30:15",
+        "VERDADERO",
+        "101",
+        "",
+        "a"
+      ],
+      [
+        "0",
+        "0.5",
+        "31/12/2023",
+        "31/12/2023 00:00:01",
+        "FALSO",
+        "1",
+        "",
+        ""
+      ],
+      [
+        "-5",
+        "-2.25",
+        "01/01/2024",
+        "01/01/2024 23:59:59",
+        "VERDADERO",
+        "",
+        "",
+        "c"
+      ],
+      [
+        "1048577",
+        "0.001",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "tipos": {
+      "Entero": "entero",
+      "Decimal": "decimal",
+      "Fecha": "fecha",
+      "FechaHora": "fecha_hora",
+      "Booleano": "si_no",
+      "Formula": "entero",
+      "Error": "vacia",
+      "Texto": "texto"
+    },
+    "celdas_combinadas": [
+      "H2:H3",
+      "G3:G4"
+    ],
+    "hojas": {
+      "Tipos": {
+        "filas": 4,
+        "columnas": 8
+      },
+      "Con vacias": {
+        "filas": 2,
+        "columnas": 2,
+        "filas_vacias_final": 3
+      }
+    },
+    "hoja_con_vacias": {
+      "columnas": [
+        "A",
+        "B"
+      ],
+      "filas": [
+        [
+          "x",
+          "1"
+        ],
+        [
+          "y",
+          "2"
+        ]
+      ]
+    }
+  },
+  "excel_tipos.xls": {
+    "hoja_principal": "Tipos",
+    "columnas": [
+      "Entero",
+      "Decimal",
+      "Fecha",
+      "FechaHora",
+      "Booleano"
+    ],
+    "filas": [
+      [
+        "100",
+        "1234.56",
+        "05/03/2024",
+        "05/03/2024 14:30:15",
+        "VERDADERO"
+      ],
+      [
+        "0",
+        "0.5",
+        "31/12/2023",
+        "31/12/2023 00:00:01",
+        "FALSO"
+      ],
+      [
+        "-5",
+        "-2.25",
+        "01/01/2024",
+        "01/01/2024 23:59:59",
+        "VERDADERO"
+      ]
+    ],
+    "tipos": {
+      "Entero": "entero",
+      "Decimal": "decimal",
+      "Fecha": "fecha",
+      "FechaHora": "fecha_hora",
+      "Booleano": "si_no"
+    }
+  },
+  "csv/pipe.csv": {
+    "separador": "|",
+    "encoding": "utf-8",
+    "columnas": [
+      "Código",
+      "Nombre",
+      "Importe"
+    ],
+    "filas": [
+      [
+        "00123",
+        "Ñandú Pérez",
+        "1234.56"
+      ],
+      [
+        "00124",
+        "José Muñoz",
+        "250.75"
+      ],
+      [
+        "00125",
+        "María Núñez",
+        "-5"
+      ]
+    ],
+    "tipos": {
+      "Código": "texto",
+      "Nombre": "texto",
+      "Importe": "decimal"
+    }
+  },
+  "csv/estilo_punto.csv": {
+    "separador": ",",
+    "encoding": "utf-8",
+    "columnas": [
+      "Producto",
+      "Precio"
+    ],
+    "filas": [
+      [
+        "Tuerca",
+        "1,234.56"
+      ],
+      [
+        "Tornillo",
+        "250.75"
+      ],
+      [
+        "Arandela",
+        "0.5"
+      ]
+    ],
+    "tipos": {
+      "Producto": "texto",
+      "Precio": "decimal"
+    },
+    "decimal_style": "."
+  },
+  "csv/solo_encabezado.csv": {
+    "separador": ";",
+    "encoding": "utf-8",
+    "columnas": [
+      "Código",
+      "Nombre",
+      "Importe"
+    ],
+    "filas": [],
+    "tipos": {
+      "Código": "vacia",
+      "Nombre": "vacia",
+      "Importe": "vacia"
+    }
+  },
+  "csv/vacio.csv": {
+    "error": "ArchivoIlegible",
+    "bytes": 0
+  },
+  "danado.xlsx": {
+    "error": "ArchivoIlegible"
+  }
+}

@@ -13,11 +13,11 @@ Dataclasses y firmas públicas que cruzan de `src/excel_tool/core/` a `src/excel
 | `app_entry.main` (`--version`, `--self-test`) | 0 | Cerrado |
 | `ui.app.run` | 0 | Cerrado |
 | `platform_utils` (carpetas de usuario, abrir carpeta, nombres seguros) | 0 | Cerrado |
-| `ReadOptions`, `CsvOptions`, `read_table`, `write_table` | 1 | Por definir |
-| `ColumnType`, funciones de `core/types.py` | 1 | Por definir |
-| `TableProfile`, `ColumnProfile`, `SheetSummary`, `value_counts`, `rows_with_value` | 2 | Borrador en PLAN.md §2 |
+| `core/errors` (base), `ReadOptions`, `CsvOptions`, `SheetSummary`, `ReadResult`, `WriteOptions`, `read_table`, `list_sheets`, `detect_csv_options`, `write_table`, `write_sheets` | 1 | Cerrado |
+| `ColumnType`, `TypeDetection`, `ConversionResult`, funciones de `core/types.py` | 1 | Cerrado |
+| `TableProfile`, `ColumnProfile`, `value_counts`, `rows_with_value` | 2 | Borrador en PLAN.md §2 |
 | Eventos de progreso y cancelación (`worker`) | 2 | Por definir |
-| Errores del core hacia la UI (excepciones y mensajes) | 2 | Por definir |
+| Errores del core hacia la UI: el resto de las excepciones y cómo las muestra la UI | 2 | Por definir (la base está en la Fase 1) |
 | `SizeEstimate`, `SizeCheck`, `SplitSpec`, `OutputSpec`, `save_result` | 3 | Borrador en PLAN.md §2 |
 | `AggregationSpec`, `JoinPlan`, `SourceSpec`, `SecondarySpec`, `KeyOptions`, `diagnose_join`, `run_join` | 4 | Borrador en PLAN.md §2 |
 
@@ -88,3 +88,137 @@ Valores de PLAN §1.2. Lo lee y valida `core/limits.py` en la Fase 3; en la Fase
   "google_sheets": {"max_cells": 20000000, "max_import_mb": 100, "comfortable_cells": 5000000, "comfortable_mb": 50}
 }
 ```
+
+### Fase 1
+
+Todo vive en `src/excel_tool/core/`. Los valores de las tablas son **siempre texto** (`str`); la celda vacía es `""` (nunca `NaN`/`None`). Las filas y columnas se numeran desde 0 en el core; la UI suma 1 al mostrarlas.
+
+#### `core/errors.py`
+
+```python
+class ExcelToolError(Exception):
+    """Base. `mensaje` está en castellano, sin jerga, listo para mostrar al usuario."""
+    def __init__(self, mensaje: str, detalle: str | None = None): ...
+    mensaje: str
+    detalle: str | None      # técnico, solo para el log
+
+class ArchivoNoEncontrado(ExcelToolError): ...
+class ArchivoBloqueado(ExcelToolError): ...    # PermissionError: "Cerrá el archivo en Excel y volvé a intentar."
+class FormatoNoSoportado(ExcelToolError): ...  # extensión fuera de PLAN §1.1
+class ArchivoIlegible(ExcelToolError): ...     # dañado, vacío, encoding imposible, hoja inexistente
+```
+
+- El core **nunca** deja escapar `PermissionError`, `FileNotFoundError`, errores de calamine/openpyxl/pandas al leer o escribir: los envuelve en una de estas, con la excepción original en `detalle` y encadenada (`raise ... from e`).
+
+#### `core/io/__init__.py`
+
+```python
+FileFormat = Literal["xlsx", "xlsm", "xlsb", "xls", "ods", "csv"]   # .txt se trata como "csv"
+WriteFormat = Literal["xlsx", "csv_excel", "csv_google", "csv_standard"]
+
+@dataclass(frozen=True)
+class CsvOptions:
+    separator: str                 # ";", ",", "\t" o "|"
+    encoding: str                  # "utf-8-sig", "utf-8" o "cp1252"
+
+@dataclass(frozen=True)
+class ReadOptions:
+    sheet: str | None = None       # Excel: None = primera hoja. CSV: se ignora
+    header_row: int | None = None  # None = detectar. Las filas de arriba se descartan
+    csv: CsvOptions | None = None  # None = detectar
+    nrows: int | None = None       # None = todas (para preview: 10 o 50)
+
+@dataclass(frozen=True)
+class SheetSummary:
+    name: str
+    rows: int                      # filas de datos sin contar el encabezado detectado
+    columns: int
+
+@dataclass
+class ReadResult:
+    df: pd.DataFrame               # todas las columnas dtype object con str; "" = vacío
+    path: Path
+    format: FileFormat
+    sheet: str | None              # hoja leída (Excel)
+    sheets: list[str]              # todas las hojas (Excel); [] en CSV
+    csv_options: CsvOptions | None # las usadas (detectadas o pedidas)
+    header_row: int                # fila del encabezado usada (0 = primera fila del archivo/hoja)
+    renamed_columns: dict[str, str]  # nombre final -> original, solo para las que se renombraron
+    warnings: list[str]            # en castellano, para mostrar tal cual
+
+def read_table(path: Path, options: ReadOptions | None = None) -> ReadResult: ...
+def list_sheets(path: Path) -> list[SheetSummary]: ...     # CSV: una sola entrada con name = nombre del archivo
+def detect_csv_options(path: Path) -> CsvOptions: ...
+
+@dataclass(frozen=True)
+class WriteOptions:
+    format: WriteFormat
+    sheet_name: str = "Datos"                       # xlsx
+    column_types: dict[str, ColumnType] | None = None
+    # None  -> se escribe todo como texto, exactamente como está (ida y vuelta sin cambios).
+    # dict  -> las columnas "entero"/"decimal" se escriben como número, "fecha"/"fecha_hora" como fecha
+    #          (convertidas con core/types); las celdas que no se pueden convertir quedan como texto
+    #          y se informan en el resultado.
+
+@dataclass
+class WriteResult:
+    path: Path
+    rows: int
+    unconverted: dict[str, list[tuple[int, str]]]  # columna -> [(fila, valor)] que quedaron como texto
+
+def write_table(df: pd.DataFrame, path: Path, options: WriteOptions) -> WriteResult: ...
+def write_sheets(sheets: dict[str, pd.DataFrame], path: Path,
+                 column_types: dict[str, dict[str, ColumnType]] | None = None) -> list[WriteResult]: ...  # solo xlsx
+```
+
+**Reglas de lectura**
+- Formato por extensión (sin importar mayúsculas). Otra extensión → `FormatoNoSoportado`.
+- CSV: separador con `csv.Sniffer` entre `; , \t |`, mostrado en `csv_options`; encoding probando `utf-8-sig` → `utf-8` → `cp1252`.
+- Excel (calamine): un número entero sale como `"100"` (nunca `"100.0"`); un decimal en notación con punto y sin exponente (`"1234.56"`); una fecha como `"dd/mm/aaaa"` y fecha con hora como `"dd/mm/aaaa hh:mm:ss"` (así `types.py` las trata igual que en un CSV argentino); booleano como `"VERDADERO"`/`"FALSO"`; error de fórmula (`#N/A`, `=NA()`) sale **vacío** (`""`): calamine no lo distingue (ADR-022). Una fecha a medianoche sin hora sale como fecha (`dd/mm/aaaa`), no como fecha y hora.
+- Fórmulas y celdas combinadas se leen como valores: una advertencia por archivo si se detectan (si detectarlo es caro, se deja para la Fase 2 y se anota).
+- Encabezado: `header_row=None` → detectarlo en las primeras 30 filas (la primera fila "completa" seguida de filas de datos consistentes). Si no hay nada que parezca encabezado, se usa la fila 0.
+- Nombres de columna: se recortan espacios. Vacío → `"Columna <letra>"` (ej. `"Columna F"`). Repetido → `"<nombre> (2)"`, `"(3)"`… Cada renombre va en `renamed_columns` y genera una advertencia ("Hay 2 columnas sin nombre…", "Hay 2 columnas con el mismo nombre…").
+- Se descartan las filas totalmente vacías **al final** del archivo/hoja (no las del medio: esas las cuenta el explorador).
+- También se descartan las columnas del final que no tienen ni encabezado ni datos (hojas con formato aplicado de más). Celdas de solo hora o duración salen como `hh:mm:ss`.
+- `list_sheets` cuenta las filas reales (no confiar en `total_height` de calamine: puede dar una de menos).
+
+**Reglas de escritura**
+- `csv_excel`: `;` + `utf-8-sig` + coma decimal. `csv_google`: `,` + `utf-8` + punto decimal. `csv_standard`: `,` + `utf-8-sig` + punto decimal. Siempre `newline=""`. El estilo decimal solo afecta a columnas convertidas a número (`column_types`).
+- `xlsx`: encabezado congelado y filtro activado en cada hoja. Nombres de hoja válidos para Excel (máx. 31 caracteres, sin `[]:*?/\`; se ajustan y se avisa).
+- Ningún límite de tamaño acá: eso es de `output.save_result` (Fase 3).
+- `PermissionError` al escribir → `ArchivoBloqueado`.
+
+#### `core/types.py`
+
+```python
+ColumnType = Literal["texto", "entero", "decimal", "fecha", "fecha_hora", "si_no", "mixto", "vacia"]
+ValueKind = Literal["texto", "entero", "decimal", "fecha", "fecha_hora", "si_no", "vacia"]
+
+@dataclass
+class TypeDetection:
+    detected: ColumnType
+    breakdown: dict[ValueKind, int]      # cuenta por clase de valor, sin "vacia"
+    empty: int                           # vacíos ("" o solo espacios)
+    decimal_style: Literal[",", "."] | None   # para entero/decimal/mixto con números
+
+@dataclass
+class ConversionResult:
+    values: pd.Series                    # float (número), datetime64 (fecha) o boolean; NaN/NaT/NA donde falló o estaba vacío
+    failed: list[tuple[int, str]]        # (posición en la serie, valor original) de las celdas NO vacías que no se pudieron convertir
+
+def classify_value(value: str, decimal_style: Literal[",", "."] = ",") -> ValueKind: ...
+def detect_column_type(values: pd.Series) -> TypeDetection: ...
+def detect_types(df: pd.DataFrame) -> dict[str, TypeDetection]: ...
+def to_number(values: pd.Series, decimal_style: Literal[",", "."] | None = None) -> ConversionResult: ...
+def to_date(values: pd.Series) -> ConversionResult: ...
+def to_bool(values: pd.Series) -> ConversionResult: ...
+```
+
+**Reglas**
+- Mira **todos** los valores de la columna, vectorizado (sin `apply` fila por fila): una columna de 2 M de filas tiene que resolverse en pocos segundos.
+- Entero: `-?\d+` y con separador de miles del estilo de la columna (`1.234` en estilo `,`). **Con ceros a la izquierda (`"00123"`) es texto** (`"0"` sí es entero).
+- Decimal: `1.234,56` / `1234,56` (estilo `,`) o `1,234.56` / `1234.56` (estilo `.`). El estilo se decide por columna; si es ambiguo, gana el argentino (`,`).
+- Fecha: `dd/mm/aaaa` (también `d/m/aaaa` y con `-`); fecha y hora: lo mismo + `hh:mm` o `hh:mm:ss`. Fechas imposibles (31/02) son texto.
+- Sí/No: `sí`, `si`, `no`, `verdadero`, `falso`, `true`, `false` (sin importar mayúsculas ni espacios). `0`/`1` son enteros.
+- Columna: sin valores → `vacia`; una sola clase → esa; entero + decimal → `decimal`; fecha + fecha_hora → `fecha_hora`; cualquier otra combinación → `mixto` (con el desglose).
+- Las conversiones **nunca** fallan en silencio: todo lo que no se pudo convertir va en `failed`.
