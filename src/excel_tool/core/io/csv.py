@@ -6,12 +6,14 @@ import codecs
 import csv
 import logging
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from excel_tool.core.errors import ArchivoBloqueado, ArchivoIlegible, ArchivoNoEncontrado
 from excel_tool.core.io import CsvOptions, ReadOptions, ReadResult
 from excel_tool.core.io.header import detect_header_row, normalize_column_names
+from excel_tool.core.progress import CancelToken, ProgressCallback, ProgressEvent, ThrottledProgress
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ SEPARADORES = ";,\t|"
 ENCODINGS = ("utf-8-sig", "utf-8", "cp1252")
 BYTES_MUESTRA = 256 * 1024
 FILAS_MUESTRA_ENCABEZADO = 30
+FILAS_POR_BLOQUE = 100_000
 
 
 def _leer_bytes_iniciales(path: Path) -> bytes:
@@ -111,41 +114,82 @@ def _ancho_maximo(path: Path, opciones: CsvOptions, cuantas: int = 2000) -> int:
     return ancho
 
 
-def _leer_crudo(path: Path, opciones: CsvOptions, nfilas: int | None) -> pd.DataFrame:
+def _leer_crudo(
+    path: Path,
+    opciones: CsvOptions,
+    nfilas: int | None,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> pd.DataFrame:
     """Todo el archivo (o las primeras `nfilas` filas) como texto, sin encabezado."""
+    if cancel is not None:
+        cancel.check()
     ancho = _ancho_maximo(path, opciones)
     try:
-        return pd.read_csv(
-            path,
-            sep=opciones.separator,
-            encoding=opciones.encoding,
-            header=None,
-            names=list(range(ancho)),
-            dtype=str,
-            keep_default_na=False,
-            na_filter=False,
-            skip_blank_lines=False,
-            nrows=nfilas,
-            quotechar='"',
-            engine="c",
-        )
+        if nfilas is not None:
+            return _leer_pandas(path, opciones, ancho, nfilas)
+        # Por bloques: cada bloque pasa a textos compactos (pyarrow) antes de leer el
+        # siguiente, y el pico de memoria baja respecto de leer todo de una vez.
+        reporte = ThrottledProgress(progress)
+        total = max(path.stat().st_size, 1)
+        mensaje = "Leyendo el archivo…"
+        reporte(ProgressEvent(mensaje, 0, total))
+        bloques: list[pd.DataFrame] = []
+        # Handle binario propio: `tell()` da los bytes leídos y se cierra siempre.
+        with path.open("rb") as f:
+            lector = _leer_pandas(f, opciones, ancho, None)
+            try:
+                for bloque in lector:
+                    bloques.append(bloque)
+                    reporte(ProgressEvent(mensaje, min(f.tell(), total), total))
+                    if cancel is not None:
+                        cancel.check()
+            finally:
+                lector.close()
+        reporte.force(ProgressEvent(mensaje, total, total))
+        if not bloques:
+            raise pd.errors.EmptyDataError("No columns to parse from file")
+        return pd.concat(bloques, ignore_index=True)
     except UnicodeDecodeError:
         raise
     except pd.errors.ParserError:
         # Filas con más campos que las de la muestra: lectura lenta pero tolerante.
-        return _leer_con_csv(path, opciones, nfilas)
+        return _leer_con_csv(path, opciones, nfilas, cancel)
 
 
-def _leer_con_csv(path: Path, opciones: CsvOptions, nfilas: int | None) -> pd.DataFrame:
+def _leer_pandas(fuente: Any, opciones: CsvOptions, ancho: int, nfilas: int | None) -> Any:
+    """`read_csv` de pandas: un DataFrame (con `nfilas`) o un lector por bloques."""
+    return pd.read_csv(
+        fuente,
+        sep=opciones.separator,
+        encoding=opciones.encoding,
+        header=None,
+        names=list(range(ancho)),
+        dtype=str,
+        keep_default_na=False,
+        na_filter=False,
+        skip_blank_lines=False,
+        nrows=nfilas,
+        quotechar='"',
+        engine="c",
+        chunksize=None if nfilas is not None else FILAS_POR_BLOQUE,
+    )
+
+
+def _leer_con_csv(
+    path: Path, opciones: CsvOptions, nfilas: int | None, cancel: CancelToken | None = None
+) -> pd.DataFrame:
     filas: list[list[str]] = []
     with path.open("r", encoding=opciones.encoding, newline="") as f:
         for fila in csv.reader(f, delimiter=opciones.separator):
             filas.append(fila)
+            if cancel is not None and len(filas) % 50_000 == 0:
+                cancel.check()
             if nfilas is not None and len(filas) >= nfilas:
                 break
     ancho = max((len(f) for f in filas), default=1)
     filas = [f + [""] * (ancho - len(f)) for f in filas]
-    return pd.DataFrame(filas, columns=list(range(ancho)), dtype=object)
+    return pd.DataFrame(filas, columns=list(range(ancho)), dtype=str)
 
 
 def _recortar_vacias_al_final(df: pd.DataFrame) -> pd.DataFrame:
@@ -163,9 +207,15 @@ def _recortar_vacias_al_final(df: pd.DataFrame) -> pd.DataFrame:
     return df.iloc[:0]
 
 
-def _leer_con(path: Path, opciones: CsvOptions, nfilas: int | None) -> pd.DataFrame:
+def _leer_con(
+    path: Path,
+    opciones: CsvOptions,
+    nfilas: int | None,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> pd.DataFrame:
     try:
-        return _leer_crudo(path, opciones, nfilas)
+        return _leer_crudo(path, opciones, nfilas, progress, cancel)
     except PermissionError as e:
         raise ArchivoBloqueado("Cerrá el archivo en Excel y volvé a intentar.", str(e)) from e
     except FileNotFoundError as e:
@@ -176,7 +226,13 @@ def _leer_con(path: Path, opciones: CsvOptions, nfilas: int | None) -> pd.DataFr
         raise ArchivoIlegible("El archivo está vacío.", str(e)) from e
 
 
-def read_csv(path: Path, options: ReadOptions | None = None) -> ReadResult:
+def read_csv(
+    path: Path,
+    options: ReadOptions | None = None,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> ReadResult:
     """Lee un CSV/TXT como texto. Lo usa `read_table`."""
     path = Path(path)
     options = options or ReadOptions()
@@ -193,7 +249,7 @@ def read_csv(path: Path, options: ReadOptions | None = None) -> ReadResult:
                     _filas_muestra(path, opciones, FILAS_MUESTRA_ENCABEZADO)
                 )
             nfilas = None if options.nrows is None else fila_enc + 1 + options.nrows
-            crudo = _leer_con(path, opciones, nfilas)
+            crudo = _leer_con(path, opciones, nfilas, progress, cancel)
         except UnicodeDecodeError as e:
             if not detectado or opciones.encoding == "cp1252":
                 raise ArchivoIlegible(
@@ -208,7 +264,7 @@ def read_csv(path: Path, options: ReadOptions | None = None) -> ReadResult:
                     _filas_muestra(path, opciones, FILAS_MUESTRA_ENCABEZADO)
                 )
             nfilas = None if options.nrows is None else fila_enc + 1 + options.nrows
-            crudo = _leer_con(path, opciones, nfilas)
+            crudo = _leer_con(path, opciones, nfilas, progress, cancel)
     except csv.Error as e:
         raise ArchivoIlegible("El archivo está dañado o no se pudo leer.", str(e)) from e
     except OSError as e:
@@ -231,7 +287,7 @@ def read_csv(path: Path, options: ReadOptions | None = None) -> ReadResult:
     if options.nrows is not None:
         df = df.iloc[: options.nrows]
     return ReadResult(
-        df=df.astype(object),
+        df=df,
         path=path,
         format="csv",
         sheet=None,

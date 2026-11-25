@@ -29,7 +29,6 @@ def test_ventana_principal():
         assert ventana.title() == APP_NAME
         textos = _textos(ventana)
         assert any(__version__ in t for t in textos)
-        assert app.TEXTO_PREPARACION in textos
         assert ventana.winfo_width() >= app.ANCHO_MINIMO
     finally:
         ventana.destroy()

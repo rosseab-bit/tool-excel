@@ -18,6 +18,7 @@ from excel_tool.core.io.header import (
     detect_header_row,
     normalize_column_names,
 )
+from excel_tool.core.progress import CancelToken, ProgressCallback, ProgressEvent
 
 log = logging.getLogger(__name__)
 
@@ -132,10 +133,24 @@ def _encabezado(filas: list[list[Any]], pedido: int | None) -> int:
     return detect_header_row([_fila_a_texto(f) for f in filas[:MAX_FILAS_ENCABEZADO]])
 
 
-def read_excel(path: Path, options: ReadOptions | None = None) -> ReadResult:
-    """Lee una hoja de un archivo Excel/ODS como texto. Lo usa `read_table`."""
+def read_excel(
+    path: Path,
+    options: ReadOptions | None = None,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> ReadResult:
+    """Lee una hoja de un archivo Excel/ODS como texto. Lo usa `read_table`.
+
+    calamine lee la hoja de una vez y no se puede cortar: se emite un evento indeterminado
+    y se mira la cancelación antes y después de leer.
+    """
     path = Path(path)
     options = options or ReadOptions()
+    if cancel is not None:
+        cancel.check()
+    if progress is not None:
+        progress(ProgressEvent("Leyendo la hoja…", 0, None))
     wb = _abrir(path)
     hojas = list(wb.sheet_names)
     if not hojas:
@@ -148,6 +163,8 @@ def read_excel(path: Path, options: ReadOptions | None = None) -> ReadResult:
         )
 
     filas = _filas_crudas(wb, hoja)
+    if cancel is not None:
+        cancel.check()
     if not filas:
         raise ArchivoIlegible("La hoja está vacía.", f"{path}: {hoja}")
     fila_enc = _encabezado(filas, options.header_row)
@@ -169,7 +186,7 @@ def read_excel(path: Path, options: ReadOptions | None = None) -> ReadResult:
     df = pd.DataFrame(
         [(_fila_a_texto(f) + [""] * ancho)[:ancho] for f in datos],
         columns=nombres,
-        dtype=object,
+        dtype=str,
     )
     return ReadResult(
         df=df,
@@ -184,11 +201,23 @@ def read_excel(path: Path, options: ReadOptions | None = None) -> ReadResult:
     )
 
 
-def list_excel_sheets(path: Path) -> list[SheetSummary]:
+def list_excel_sheets(
+    path: Path,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> list[SheetSummary]:
     """Nombre, filas de datos (sin el encabezado detectado) y columnas de cada hoja."""
+    if cancel is not None:
+        cancel.check()
     wb = _abrir(Path(path))
     resumen: list[SheetSummary] = []
-    for nombre in wb.sheet_names:
+    nombres = list(wb.sheet_names)
+    for i, nombre in enumerate(nombres):
+        if cancel is not None:
+            cancel.check()
+        if progress is not None:
+            progress(ProgressEvent("Leyendo la hoja…", i, None))
         filas = _filas_crudas(wb, nombre)
         if not filas:
             resumen.append(SheetSummary(name=nombre, rows=0, columns=0))

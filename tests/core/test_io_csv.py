@@ -1,6 +1,7 @@
 import time
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from excel_tool.core.errors import ArchivoBloqueado, ArchivoIlegible, ArchivoNoEncontrado
@@ -38,7 +39,7 @@ def test_separadores_y_encodings(tmp_path, sep, encoding):
 def test_texto_sin_conversion_de_nulos(tmp_path):
     r = read_csv(_escribir(tmp_path / "a.csv", FILAS))
     assert r.df.iloc[2].tolist() == ["NA", "null", "", "0,50"]
-    assert r.df.dtypes.eq(object).all()
+    assert all(isinstance(t, pd.StringDtype) and t.storage == "pyarrow" for t in r.df.dtypes)
     assert r.df.isna().sum().sum() == 0
 
 

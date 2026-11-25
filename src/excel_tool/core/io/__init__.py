@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 
 if TYPE_CHECKING:
+    from excel_tool.core.progress import CancelToken, ProgressCallback
     from excel_tool.core.types import ColumnType
 
 FileFormat = Literal["xlsx", "xlsm", "xlsb", "xls", "ods", "csv"]  # .txt se trata como "csv"
@@ -41,7 +42,7 @@ class SheetSummary:
 
 @dataclass
 class ReadResult:
-    df: pd.DataFrame  # todas las columnas dtype object con str; "" = vacío
+    df: pd.DataFrame  # todas las columnas de texto (dtype str, pyarrow); "" = vacío
     path: Path
     format: FileFormat
     sheet: str | None  # hoja leída (Excel)
@@ -97,24 +98,38 @@ def _extension(path: Path) -> str:
     return ext
 
 
-def read_table(path: Path, options: ReadOptions | None = None) -> ReadResult:
-    """Lee un archivo como texto, según su extensión."""
+def read_table(
+    path: Path,
+    options: ReadOptions | None = None,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> ReadResult:
+    """Lee un archivo como texto, según su extensión.
+
+    `progress` y `cancel` son opcionales (ver `core/progress.py`). `cancel` lanza `Cancelado`.
+    """
     path = Path(path)
     ext = _extension(path)
     _verificar_existe(path)
     if ext in _EXT_CSV:
-        return read_csv(path, options)
-    return read_excel(path, options)
+        return read_csv(path, options, progress=progress, cancel=cancel)
+    return read_excel(path, options, progress=progress, cancel=cancel)
 
 
-def list_sheets(path: Path) -> list[SheetSummary]:
+def list_sheets(
+    path: Path,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> list[SheetSummary]:
     """Hojas de un Excel con filas y columnas. CSV: una sola entrada con el nombre del archivo."""
     path = Path(path)
     ext = _extension(path)
     _verificar_existe(path)
     if ext in _EXT_EXCEL:
-        return list_excel_sheets(path)
-    resultado = read_csv(path)
+        return list_excel_sheets(path, progress=progress, cancel=cancel)
+    resultado = read_csv(path, progress=progress, cancel=cancel)
     return [SheetSummary(name=path.name, rows=len(resultado.df), columns=len(resultado.df.columns))]
 
 

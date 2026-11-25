@@ -26,3 +26,10 @@ class FormatoNoSoportado(ExcelToolError):
 
 class ArchivoIlegible(ExcelToolError):
     """Dañado, vacío, encoding imposible, hoja inexistente."""
+
+
+class Cancelado(ExcelToolError):
+    """El usuario canceló una operación larga."""
+
+    def __init__(self, mensaje: str = "Operación cancelada.", detalle: str | None = None) -> None:
+        super().__init__(mensaje, detalle)

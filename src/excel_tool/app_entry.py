@@ -81,6 +81,24 @@ def _paso_archivos() -> str:
     return "CSV y xlsx escritos y releídos"
 
 
+def _paso_pyarrow() -> str:
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(f"falta pyarrow en el ejecutable: {exc}") from exc
+    import pandas as pd
+
+    from excel_tool.core.io import ReadOptions, read_table
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ruta = Path(tmp) / "prueba.csv"
+        ruta.write_text("a;b\n1;2\n", encoding="utf-8")
+        df = read_table(ruta, ReadOptions(header_row=0)).df
+    if not all(isinstance(t, pd.StringDtype) and t.storage == "pyarrow" for t in df.dtypes):
+        raise RuntimeError(f"read_table no devuelve almacenamiento pyarrow: {list(df.dtypes)}")
+    return "pyarrow disponible y en uso"
+
+
 def _paso_ventana() -> str:
     import tkinter as tk
 
@@ -97,6 +115,7 @@ def _self_test() -> int:
         ("imports", _paso_imports),
         ("limites", _paso_limites),
         ("archivos", _paso_archivos),
+        ("pyarrow", _paso_pyarrow),
         ("ventana", _paso_ventana),
     ]
     fallas = 0

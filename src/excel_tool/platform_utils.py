@@ -1,5 +1,7 @@
 """Todo lo que depende del sistema operativo vive acá."""
 
+import ctypes
+import logging
 import os
 import re
 import subprocess
@@ -7,6 +9,8 @@ import sys
 from pathlib import Path
 
 from excel_tool import APP_DIR_NAME
+
+log = logging.getLogger(__name__)
 
 _PROHIBIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _RESERVADOS = {"CON", "PRN", "AUX", "NUL"}
@@ -66,3 +70,46 @@ def safe_filename(name: str, replacement: str = "_") -> str:
             limpio = limpio[:_MAX_LARGO]
         limpio = limpio.rstrip(" .") or "sin_nombre"
     return limpio
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [  # noqa: RUF012
+        ("dwLength", ctypes.c_uint32),
+        ("dwMemoryLoad", ctypes.c_uint32),
+        ("ullTotalPhys", ctypes.c_uint64),
+        ("ullAvailPhys", ctypes.c_uint64),
+        ("ullTotalPageFile", ctypes.c_uint64),
+        ("ullAvailPageFile", ctypes.c_uint64),
+        ("ullTotalVirtual", ctypes.c_uint64),
+        ("ullAvailVirtual", ctypes.c_uint64),
+        ("sullAvailExtendedVirtual", ctypes.c_uint64),
+    ]
+
+
+def _available_memory_windows() -> int:
+    estado = _MemoryStatusEx()
+    estado.dwLength = ctypes.sizeof(_MemoryStatusEx)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(estado)):  # type: ignore[attr-defined]
+        raise OSError("GlobalMemoryStatusEx falló")
+    return int(estado.ullAvailPhys)
+
+
+def _available_memory_linux() -> int:
+    with Path("/proc/meminfo").open(encoding="utf-8") as f:
+        for linea in f:
+            if linea.startswith("MemAvailable:"):
+                return int(linea.split()[1]) * 1024  # viene en kB
+    raise OSError("no hay MemAvailable en /proc/meminfo")
+
+
+def available_memory() -> int | None:
+    """Bytes de memoria libre, o None si no se puede saber."""
+    try:
+        if sys.platform == "win32":
+            return _available_memory_windows()
+        if sys.platform.startswith("linux"):
+            return _available_memory_linux()
+        log.info("Memoria libre: sistema no soportado (%s)", sys.platform)
+    except (OSError, ValueError, AttributeError, IndexError) as exc:
+        log.info("No se pudo leer la memoria libre: %s", exc)
+    return None

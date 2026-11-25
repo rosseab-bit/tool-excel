@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import shutil
 
+import pandas as pd
 import pytest
 
 from excel_tool.core.errors import ArchivoBloqueado, ArchivoIlegible
@@ -73,6 +74,9 @@ def test_formatos(fixtures_generados, nombre):
     assert list(r.df.columns) == ["Código", "Nombre", "Localidad", "Saldo"]
     assert r.df.iloc[0].tolist() == ["00123", "Ñandú Pérez", "Córdoba", "1234.56"]
     assert len(r.df) == 12
+    # Textos compactos (ADR-025): dtype str con almacenamiento pyarrow y vacíos como "".
+    assert all(isinstance(t, pd.StringDtype) and t.storage == "pyarrow" for t in r.df.dtypes)
+    assert not r.df.isna().any().any()
 
 
 def test_hoja_por_nombre_y_inexistente(fixtures_generados):

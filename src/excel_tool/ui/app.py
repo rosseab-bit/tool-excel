@@ -6,12 +6,24 @@ from importlib import resources
 from tkinter import ttk
 
 from excel_tool import APP_NAME, __version__
+from excel_tool.ui.explorador import abrir_explorador
+from excel_tool.ui.selector import Seleccion, abrir_selector
 
 logger = logging.getLogger(__name__)
 
 ANCHO_MINIMO = 480
 ALTO_MINIMO = 320
-TEXTO_PREPARACION = "Estamos preparando la aplicación. Muy pronto vas a poder usarla desde acá."
+PROXIMAMENTE = "Próximamente"
+OPCIONES_INICIO = (
+    ("Ver información de un archivo", "Mirá qué tiene: columnas, tipos de datos y valores.", True),
+    ("Unir archivos", "Combiná varios archivos a partir de una columna en común.", False),
+    (
+        "Juntar archivos uno debajo del otro",
+        "Armá un solo archivo con las filas de varios.",
+        False,
+    ),
+    ("Dividir un archivo", "Partí un archivo grande en varios más chicos.", False),
+)
 
 
 def _cargar_icono(ventana: tk.Tk) -> None:
@@ -34,6 +46,41 @@ def _centrar(ventana: tk.Tk) -> None:
     ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
 
 
+class PantallaInicio(ttk.Frame):
+    """Pantalla de inicio con las cuatro acciones principales."""
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, padding=24)
+        self.pack(fill="both", expand=True)
+        ttk.Label(self, text=APP_NAME, font="TkHeadingFont").pack(pady=(8, 2))
+        ttk.Label(self, text=f"Versión {__version__}", font="TkSmallCaptionFont").pack()
+        ttk.Label(self, text="¿Qué querés hacer?", font="TkTextFont").pack(pady=(16, 8))
+        self.botones: list[ttk.Button] = []
+        for titulo, explicacion, habilitado in OPCIONES_INICIO:
+            marco = ttk.Frame(self)
+            marco.pack(fill="x", pady=6)
+            boton = ttk.Button(
+                marco, text=titulo, command=self._ver_informacion if habilitado else None
+            )
+            boton.pack(fill="x", ipady=8)
+            texto = explicacion if habilitado else f"{PROXIMAMENTE}. {explicacion}"
+            ttk.Label(marco, text=texto, font="TkSmallCaptionFont", wraplength=420).pack(anchor="w")
+            if not habilitado:
+                boton.state(["disabled"])
+            self.botones.append(boton)
+        self.estado = ttk.Label(self, text="", wraplength=420)
+        self.estado.pack(pady=(12, 0))
+        self.selector = None
+        self.explorador = None
+
+    def _ver_informacion(self) -> None:
+        self.selector = abrir_selector(self.winfo_toplevel(), self._cargar)
+
+    def _cargar(self, eleccion: Seleccion) -> None:
+        self.estado.configure(text="")
+        self.explorador = abrir_explorador(self.winfo_toplevel(), eleccion)
+
+
 def crear_ventana() -> tk.Tk:
     """Arma la ventana principal sin iniciar el bucle de eventos."""
     ventana = tk.Tk()
@@ -42,13 +89,7 @@ def crear_ventana() -> tk.Tk:
         ventana.minsize(ANCHO_MINIMO, ALTO_MINIMO)
         _cargar_icono(ventana)
 
-        marco = ttk.Frame(ventana, padding=24)
-        marco.pack(fill="both", expand=True)
-        ttk.Label(marco, text=APP_NAME, font="TkHeadingFont").pack(pady=(40, 4))
-        ttk.Label(marco, text=f"Versión {__version__}", font="TkSmallCaptionFont").pack()
-        ttk.Label(
-            marco, text=TEXTO_PREPARACION, font="TkTextFont", wraplength=400, justify="center"
-        ).pack(pady=24)
+        PantallaInicio(ventana)
         _centrar(ventana)
     except Exception:
         ventana.destroy()

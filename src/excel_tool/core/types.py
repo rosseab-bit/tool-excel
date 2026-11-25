@@ -13,6 +13,8 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from excel_tool.core.progress import CancelToken
+
 ColumnType = Literal["texto", "entero", "decimal", "fecha", "fecha_hora", "si_no", "mixto", "vacia"]
 ValueKind = Literal["texto", "entero", "decimal", "fecha", "fecha_hora", "si_no", "vacia"]
 DecimalStyle = Literal[",", "."]
@@ -146,29 +148,53 @@ def classify_value(value: str, decimal_style: DecimalStyle = ",") -> ValueKind:
     return _clasificar(serie.str.strip(), decimal_style)[0]  # type: ignore[return-value]
 
 
+BLOQUE_UNICOS = 200_000
+
+
 def _resolver_unicos(values: pd.Series):
-    """Devuelve (codigos, unicos_limpios) para clasificar cada valor distinto una sola vez."""
+    """Devuelve (codigos, unicos) para clasificar cada valor distinto una sola vez.
+
+    `unicos` queda en su forma compacta (pyarrow si la columna lo es); se pasa a texto de
+    Python por bloques (`_bloques`), para no armar millones de objetos de una sola vez.
+    """
+    if isinstance(values.dtype, pd.StringDtype):
+        codigos, unicos = pd.factorize(values.fillna("").array)
+        return codigos, unicos
     codigos, unicos = pd.factorize(_como_texto(values))
-    return codigos, _strip(np.asarray(unicos, dtype=object))
+    return codigos, np.asarray(unicos, dtype=object)
 
 
-def _estilo_de(limpio: pd.Series) -> DecimalStyle:
-    """Estilo con más valores numéricos; si empatan, el argentino (",").
+def _bloques(unicos):
+    """(inicio, valores sin espacios en los bordes) de a BLOQUE_UNICOS valores."""
+    for ini in range(0, len(unicos), BLOQUE_UNICOS):
+        trozo = np.asarray(unicos[ini : ini + BLOQUE_UNICOS], dtype=object)
+        yield ini, _strip(trozo)
+
+
+def _cuentas_estilo(limpio: pd.Series) -> tuple[int, int, int]:
+    """(con separador, válidos como argentino, válidos como inglés).
 
     Solo importan las celdas con "." o ",": un número sin separadores vale igual en los dos.
     """
     con_sep = limpio[limpio.str.contains(r"[.,]", regex=True).to_numpy(dtype=bool)]
     if con_sep.empty:
-        return ","
+        return 0, 0, 0
+    cuentas = []
+    for estilo in (",", "."):
+        e, d = _patrones_numero(estilo)  # type: ignore[arg-type]
+        cuentas.append(int(_match(con_sep, f"{e}|{d}").sum()))
+    return len(con_sep), cuentas[0], cuentas[1]
 
-    def cuenta(estilo: DecimalStyle) -> int:
-        e, d = _patrones_numero(estilo)
-        return int(_match(con_sep, f"{e}|{d}").sum())
 
-    argentino = cuenta(",")
-    if argentino == len(con_sep):  # nadie puede ganarle (el empate es del argentino)
+def _elegir_estilo(con_sep: int, argentino: int, ingles: int) -> DecimalStyle:
+    """Estilo con más valores numéricos; si empatan, el argentino (",")."""
+    if con_sep == 0 or argentino == con_sep:
         return ","
-    return "." if cuenta(".") > argentino else ","
+    return "." if ingles > argentino else ","
+
+
+def _estilo_de(limpio: pd.Series) -> DecimalStyle:
+    return _elegir_estilo(*_cuentas_estilo(limpio))
 
 
 def _tipo_de_columna(presentes: set[str]) -> ColumnType:
@@ -183,16 +209,30 @@ def _tipo_de_columna(presentes: set[str]) -> ColumnType:
     return "mixto"
 
 
-def detect_column_type(values: pd.Series) -> TypeDetection:
-    """Tipo de una columna mirando todos sus valores."""
-    codigos, limpio = _resolver_unicos(values)
-    repeticiones = np.bincount(codigos[codigos >= 0], minlength=len(limpio))
-    estilo = _estilo_de(limpio)
-    clases = _clasificar(limpio, estilo)
+def detect_column_type(values: pd.Series, *, cancel: CancelToken | None = None) -> TypeDetection:
+    """Tipo de una columna mirando todos sus valores.
+
+    Con `cancel`, mira la bandera en cada bloque de valores distintos y lanza `Cancelado`.
+    """
+    codigos, unicos = _resolver_unicos(values)
+    if cancel:
+        cancel.check()
+    repeticiones = np.bincount(codigos[codigos >= 0], minlength=len(unicos))
+    del codigos
+    totales = np.zeros(3, dtype=np.int64)
+    for _, limpio in _bloques(unicos):
+        if cancel:
+            cancel.check()
+        totales += _cuentas_estilo(limpio)
+    estilo = _elegir_estilo(*(int(x) for x in totales))
 
     cuenta: dict[str, int] = {}
-    for clase, cant in zip(clases, repeticiones, strict=True):
-        cuenta[clase] = cuenta.get(clase, 0) + int(cant)
+    for ini, limpio in _bloques(unicos):
+        if cancel:
+            cancel.check()
+        clases = _clasificar(limpio, estilo)
+        for clase, cant in zip(clases, repeticiones[ini : ini + len(clases)], strict=True):
+            cuenta[clase] = cuenta.get(clase, 0) + int(cant)
     vacios = cuenta.pop("vacia", 0)
     desglose = {k: v for k, v in cuenta.items() if v > 0}
     tipo = _tipo_de_columna(set(desglose))
@@ -205,10 +245,15 @@ def detect_column_type(values: pd.Series) -> TypeDetection:
     )
 
 
-def detect_types(df: pd.DataFrame) -> dict[str, TypeDetection]:
+def detect_types(
+    df: pd.DataFrame, *, cancel: CancelToken | None = None
+) -> dict[str, TypeDetection]:
     """Detección de cada columna, por posición (los nombres repetidos se pisan: el
     llamador usa nombres ya únicos)."""
-    return {str(nombre): detect_column_type(df.iloc[:, i]) for i, nombre in enumerate(df.columns)}
+    return {
+        str(nombre): detect_column_type(df.iloc[:, i], cancel=cancel)
+        for i, nombre in enumerate(df.columns)
+    }
 
 
 def _fallidas(original: np.ndarray, falla: np.ndarray) -> list[tuple[int, str]]:
