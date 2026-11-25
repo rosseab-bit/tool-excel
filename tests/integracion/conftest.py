@@ -53,21 +53,52 @@ class EntornoUI:
             time.sleep(0.02)
 
 
+TOPE_HILOS_S = 40
+
+
+@pytest.fixture(scope="session")
+def raiz_sesion():
+    """Un solo intérprete Tk para toda la sesión (como la app real).
+
+    En Windows crear y destruir muchos intérpretes Tcl en un mismo proceso es frágil (errores de
+    init.tcl / tcl_findLibrary). Cada test usa esta raíz oculta como `parent` de sus ventanas.
+    """
+    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
+        pytest.skip("no hay pantalla (en Linux usar xvfb-run -a)")
+    raiz = tk.Tk()
+    raiz.withdraw()
+    yield raiz
+    try:
+        raiz.destroy()
+    except tk.TclError:
+        pass
+
+
+def _esperar_hilos_worker() -> list[str]:
+    limite = time.monotonic() + TOPE_HILOS_S
+    for hilo in threading.enumerate():
+        if hilo.name == "worker" and hilo is not threading.current_thread():
+            hilo.join(max(0.0, limite - time.monotonic()))
+    return [h.name for h in threading.enumerate() if h.name == "worker" and h.is_alive()]
+
+
+def _limpiar_raiz(raiz: tk.Tk) -> None:
+    try:
+        for id_after in raiz.tk.splitlist(raiz.tk.call("after", "info")):
+            raiz.after_cancel(id_after)
+        for hija in raiz.winfo_children():
+            hija.destroy()
+        raiz.update_idletasks()
+    except tk.TclError:
+        pass
+
+
 @pytest.fixture
-def entorno_ui(tmp_path, monkeypatch):
+def entorno_ui(tmp_path, monkeypatch, raiz_sesion):
     if sys.platform != "win32" and not os.environ.get("DISPLAY"):
         pytest.skip("no hay pantalla (en Linux usar xvfb-run -a)")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "datos"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "datos"))
-
-    ventanas: list[tk.Tk] = []
-    original = tk.Tk.__init__
-
-    def registrar(self, *args, **kwargs):
-        original(self, *args, **kwargs)
-        ventanas.append(self)
-
-    monkeypatch.setattr(tk.Tk, "__init__", registrar)
 
     entorno_box: dict[str, EntornoUI] = {}
 
@@ -107,23 +138,20 @@ def entorno_ui(tmp_path, monkeypatch):
 
     gc.collect()
     gc.disable()
+    raiz = raiz_sesion
+    entorno = EntornoUI(raiz)
+    entorno_box["e"] = entorno
+    colgados: list[str] = []
     try:
-        raiz = tk.Tk()
-        entorno = EntornoUI(raiz)
-        entorno_box["e"] = entorno
         yield entorno
     finally:
-        for ventana in ventanas:
-            try:
-                for id_after in ventana.tk.splitlist(ventana.tk.call("after", "info")):
-                    ventana.after_cancel(id_after)
-                for hija in ventana.winfo_children():
-                    hija.destroy()
-                ventana.destroy()
-            except tk.TclError:
-                pass
-        for hilo in threading.enumerate():
-            if hilo.name == "worker" and hilo is not threading.current_thread():
-                hilo.join(40)
+        # Los hilos primero: si siguen vivos tocando Tcl, no se destruye nada debajo de ellos.
+        colgados = _esperar_hilos_worker()
+        _limpiar_raiz(raiz)
         gc.enable()
         gc.collect()
+    if colgados:
+        pytest.fail(
+            f"el test dejó hilos del worker vivos pasados {TOPE_HILOS_S} s: {colgados}",
+            pytrace=False,
+        )
