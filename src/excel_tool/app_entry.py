@@ -44,7 +44,7 @@ def _paso_imports() -> str:
     for nombre in (
         "pandas",
         "numpy",
-        "openpyxl",
+        "xlsxwriter",
         "python_calamine",
         "tkinter",
         "excel_tool.ui.app",
@@ -54,11 +54,16 @@ def _paso_imports() -> str:
 
 
 def _paso_limites() -> str:
+    from excel_tool.core import limits
+
     ruta = resources.files("excel_tool") / "limites_default.json"
     datos = json.loads(ruta.read_text(encoding="utf-8"))
     if "excel" not in datos or "google_sheets" not in datos:
         raise ValueError("faltan secciones en limites_default.json")
-    return "limites_default.json leído"
+    valores = limits.load_limits()
+    if valores.excel_max_rows <= 0 or valores.gs_max_cells <= 0:
+        raise ValueError("límites inválidos")
+    return "límites leídos"
 
 
 def _paso_archivos() -> str:

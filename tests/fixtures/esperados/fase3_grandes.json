@@ -1,0 +1,22 @@
+{
+  "_nota": "Calculado desde la definicion de los datos del generador, sin leer los archivos. Los clientes se sortean con peso 1/(i+1): el tamano de cada grupo lo calcula el test contando el archivo.",
+  "filas": {
+    "fase3_400k.csv": 400000,
+    "fase3_dividir_1600k.csv": 1600000
+  },
+  "clientes_posibles": 5000,
+  "regiones_400k": {
+    "Norte": 80000,
+    "Sur": 80000,
+    "Centro": 80000,
+    "Cuyo": 80000,
+    "Litoral": 80000
+  },
+  "regiones_dividir": {
+    "Norte": 1200000,
+    "Sur": 100000,
+    "Centro": 100000,
+    "Cuyo": 100000,
+    "Litoral": 100000
+  }
+}

@@ -135,7 +135,7 @@ Ninguno bloqueante ni de gravedad media o alta.
 - Con `tests/fixtures/generados/grandes/rendimiento_2M.csv`: tiene que mostrar el progreso, poder cancelarse y
   cerrarse en un instante; cerrar la ventana a mitad del análisis.
 
-## Para probar en Windows (PM): checklist de las Fases 0, 1 y 2
+## Para probar en Windows (PM): checklist de las Fases 0 a 3 (la Fase 3 es la sección E; el detalle de la Fase 3 está en `docs/qa/fase-3.md`)
 Lo que hay que hacer en una PC nueva con Windows (ideal: 8 GB de RAM, como las de los usuarios). Anotar al lado
 de cada paso OK / FALLA / observación (con captura si falla). Referencias: `README.md`, `docs/fases/fase-0.md`,
 `fase-1.md` y `fase-2.md` (Notas).
@@ -153,9 +153,9 @@ de cada paso OK / FALLA / observación (con captura si falla). Referencias: `REA
 6. `.venv\Scripts\python.exe scripts\make_fixtures.py` -> genera `tests\fixtures\generados\` (incluye el CSV de 2M
    y el xlsx de 500k; tarda varios minutos; con `--sin-grandes` los saltea, pero entonces no se pueden hacer los
    pasos 17 a 20).
-7. `scripts\dev.bat -Tests` -> tiene que terminar con **"Todo bien"** (en Linux: 564 passed, 2 skipped). Si falla
+7. `scripts\dev.bat -Tests` -> tiene que terminar con **"Todo bien"** (en Linux, tras la Fase 3: 891 passed, 2 skipped). Si falla
    algo, copiar el nombre del test y el mensaje. Los tests de pantalla (`pantalla`) corren con la ventana real.
-   Anotar el tiempo total (en Linux: ~3 min 40 s).
+   Anotar el tiempo total (en Linux: ~3 min 40 s hasta la Fase 2; ~6 min con la Fase 3).
 8. `scripts\dev.bat -AppArgs --version` -> imprime "Excel Join Tool 0.1.0"; `scripts\dev.bat -AppArgs --self-test`
    -> `SELF-TEST OK` (ahora incluye pyarrow real y `core/io`).
 9. Doble clic en `scripts\dev.bat` -> abre la ventana de la app (la consola espera y no se cierra sola ante un error).
@@ -215,7 +215,7 @@ de cada paso OK / FALLA / observación (con captura si falla). Referencias: `REA
     nuevo." (montos con coma) y **no** cargar el archivo. Si el cartel no sale con la PC cargada, revisar
     `platform_utils.available_memory` (usa `GlobalMemoryStatusEx`).
 
-**D. Compilación del .exe (Fases 0, 1 y 2)**
+**D. Compilación del .exe (Fases 0 a 3)**
 25. `scripts\build_windows.bat` (corre tests, compila, prueba el `.exe` y arma `dist\ExcelJoinTool-0.1.0-windows.zip`).
     Tiene que terminar con `SELF-TEST OK` y mostrar tamaño y SHA256. En Linux la carpeta pesa 206 MB y el
     `.tar.gz` 73 MB; anotar los de Windows. Si pregunta SmartScreen ("Windows protegió su PC": Más información ->
@@ -227,6 +227,68 @@ de cada paso OK / FALLA / observación (con captura si falla). Referencias: `REA
 27. Copiar el `.zip` a una **PC sin Python**, descomprimir y abrir `ExcelJoinTool.exe` con doble clic: se abre sin
     consola negra; repetir los pasos 10 a 12 y 20 con el `.exe`.
 
-**E. Para informar**
-28. Pasar al líder: resultado de cada paso (OK / FALLA / observación), los números de tiempo y memoria de los
-    pasos 7, 20, 21 y 25, y el log de `%LOCALAPPDATA%\ExcelJoinTool\logs` si algo falló.
+**E. Guardar, dividir y límites (Fase 3)**
+Archivos: `make_fixtures.py` (paso 6) ya genera `grandes\fase3_400k.csv`, `grandes\fase3_dividir_1600k.csv` y
+`fase3\nombres_raros.csv`. Lo ya cubierto por los pasos 15, 16 y 19 (Excel real, CSV con doble clic, archivo
+abierto en Excel al LEER) no se repite: acá se prueba al GUARDAR. Referencias: `docs/fases/fase-3.md` (Notas).
+28. **Semáforo en General:** abrir `fase3_400k.csv`: Excel en amarillo ("CONVIENE DIVIDIR") y Google Sheets en
+    verde, sin botón "Dividir y guardar…". Abrir `fase3_dividir_1600k.csv`: Excel en rojo ("NO ENTRA EN UN SOLO
+    ARCHIVO") con el botón "Dividir y guardar…" y Google Sheets en amarillo. **Colores de Windows:** el texto se
+    lee bien sobre cada color (verde, amarillo, rojo), también con el modo oscuro y con "contraste alto"; anotar.
+29. **Exportar lo filtrado, con Excel real:** `para_explorar.csv`, pestaña Datos, "Importe es mayor que 5000",
+    "Exportar lo filtrado…", Excel, guardar en el Escritorio, abrir en Excel: 109 filas; **encabezado congelado**
+    (al bajar queda la fila 1), **flechitas de filtro** en el encabezado; ID, Importe y Total son **números**
+    (alineados a la derecha, la barra de estado suma); Fecha es **fecha real** (se puede filtrar por año/mes);
+    "Código" conserva el cero ("02055") como texto; Excel no pide "reparar" ni muestra #NOMBRE?.
+30. **Textos que empiezan con "=":** crear en el Bloc de notas `ID;Texto` / `1;=1+1` / `2;+5` / `3;-3` / `4;@x`
+    (guardar como CSV UTF-8), abrirlo en la app, exportarlo como .xlsx y abrirlo en Excel real: las celdas se
+    ven literalmente como `=1+1`, `+5`, etc. (texto, sin calcular ni avisar de fórmula).
+31. **Dividir y guardar, por valor:** `fase3_dividir_1600k.csv` -> "Dividir y guardar…" -> "Un archivo por cada valor"
+    de Región -> "CSV para Excel" -> Guardar. Sale "Se guardaron N archivos con 1.600.000 filas en total
+    (coincide con el resultado ✅)" y **"Abrir carpeta" abre el Explorador de Windows en esa carpeta**. En la carpeta:
+    las partes y `_indice.xlsx` (abrirlo en Excel: columnas Archivo, Hoja, Filas, Desde fila, Hasta fila y Valor;
+    Filas como números). Repetir con `fase3_400k.csv` en **.xlsx**, por filas, y abrir **cada parte en Excel real**
+    como en el paso 29 (encabezado congelado, filtro, números y fechas reales).
+32. **Nombres raros en el Explorador de Windows:** `nombres_raros.csv`, un archivo por cada valor de Sucursal (en
+    CSV y en .xlsx). Tienen que existir los 20 archivos sin error, con nombres como `nombres_raros_Norte_Sur.csv`,
+    `nombres_raros_Norte_Sur (2).csv` (el de "Norte/Sur" y el de "Norte_Sur" no se pisan), `nombres_raros_CON.csv`,
+    `nombres_raros_nul.csv`, `nombres_raros_a_b.csv`, `nombres_raros_aux.txt.csv`, `nombres_raros_vacio.csv`, y
+    los dos valores larguísimos de "AAAA…" acortados; ninguno con espacio o punto al final. Abrir varios con doble
+    clic. Ninguno puede llamarse solo `CON` o `NUL` (Windows los trata como dispositivos).
+33. **Carpeta repetida:** guardar dos veces por partes con el mismo nombre en la misma carpeta: la segunda crea
+    `<nombre> (2)` y la primera no cambia.
+34. **Archivo abierto en Excel al GUARDAR:** guardar un resultado en un solo archivo sobre un .xlsx que está abierto
+    en Excel (misma ruta, confirmando que se reemplaza): cartel amable ("Cerrá el archivo en Excel…"), el original
+    sigue intacto, **no queda ningún `.tmp` en la carpeta**. Cerrar Excel y repetir: guarda bien. Anotar si el mensaje
+    dice otra cosa (caso `OSError` distinto de `PermissionError`, ver `fase-1.md`).
+35. **Ruta larga:** guardar por partes en una carpeta anidada de ~200 caracteres: las partes se acortan y aparece el
+    aviso "Algunos nombres de archivo se acortaron…"; con una ruta de más de ~250 caracteres, mensaje amable de
+    "ruta demasiado larga" (sin traceback). Probar con "rutas largas" habilitadas y deshabilitadas en Windows.
+36. **Antivirus y `.tmp`:** guardar `rendimiento_500k.xlsx` convertido o el resultado de 400k en .xlsx con el
+    antivirus activo (Defender u otro de la empresa): al terminar no queda ningún `.tmp` ni `.part`; si el antivirus
+    retiene el temporal y falla el renombrado, tiene que salir un cartel amable (nunca un traceback) y no dejar
+    archivos a medias. Anotar si el escaneo hace notablemente más lento el guardado.
+37. **Cancelar al guardar:** `fase3_dividir_1600k.csv` por partes de 200.000 filas en .xlsx, apretar "Cancelar" a
+    los 20 s: se cierra la ventana de progreso, no queda la carpeta de partes (ni vacía) ni archivos `.tmp`, y lo que
+    ya existía en la carpeta no cambió. Lo mismo con "CSV para Excel".
+38. **CSV de salida:** una parte "CSV para Excel" abre con doble clic en Excel de Windows en castellano con las
+    columnas separadas, tildes y ñ bien y coma decimal. Una parte "CSV para Google Sheets" (`,` y punto decimal) en
+    Excel de Windows en castellano se puede ver mal (esperado: anotar cómo); importarla en **Google Sheets real**
+    (Archivo -> Importar): debe entrar completa, y los avisos "La parte N pesa X MB" aparecen si pasa de 100 MB.
+39. **`limites.json`:** copiar junto al `.exe` un `limites.json` con `{"excel": {"comfortable_rows": 100000}}`,
+    reiniciar y abrir `fase3_400k.csv`: el semáforo de Excel pasa a "Conviene dividir" con otro número de partes;
+    con `{"excel": {"max_rows": 300000}}` pasa a rojo; con el archivo roto (texto que no es JSON) la app abre igual
+    y usa los valores por defecto. Repetir con el de `%LOCALAPPDATA%\ExcelJoinTool\limites.json` (si están los
+    dos, manda este último). Mirar que el log registre una línea cuando el archivo está roto.
+40. **Ventana Guardar en pantalla chica:** en una notebook de 1366x768 con escala del 100 %, 125 % y 150 %
+    (Configuración -> Pantalla): la ventana entra entera, los botones "Guardar…" y "Cerrar" y el cartel con
+    "Abrir carpeta" quedan a la vista sin tapar la barra de tareas; el cuerpo se desplaza con la barra y con la
+    rueda del mouse (también con el puntero sobre la tabla de partes). Anotar si algo queda cortado.
+41. **Memoria y tiempo con 2M (presupuesto 1,5 GB):** `rendimiento_2M.csv` -> "Dividir y guardar…" -> por filas
+    (7 partes) en "CSV para Excel" y en .xlsx: pico de memoria en el Administrador de tareas **<= 1,5 GB** (en Linux
+    1,15 GB, igual que el perfil: guardar no lo sube) y tiempos (Linux: guardar CSV 29 s, .xlsx 173 s).
+42. Repetir 28, 29, 31 y 37 con el `.exe` compilado (el paso 25 ya prueba que `xlsxwriter` entra en el ejecutable).
+
+**F. Para informar**
+43. Pasar al líder: resultado de cada paso (OK / FALLA / observación), los números de tiempo y memoria de los
+    pasos 7, 20, 21, 25 y 41, y el log de `%LOCALAPPDATA%\ExcelJoinTool\logs` si algo falló.

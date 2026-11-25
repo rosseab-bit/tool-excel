@@ -18,6 +18,7 @@ import argparse
 import csv
 import datetime as dt
 import hashlib
+import itertools
 import json
 import random
 import struct
@@ -1389,6 +1390,117 @@ def grupo_fase1(salida: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Grupo: fase3 (nombres de archivo raros al dividir) + fase3_nombres.json
+# ---------------------------------------------------------------------------
+
+# (valor de la columna Sucursal, cantidad de filas). Caracteres prohibidos en Windows, nombres
+# reservados, valores iguales sin distinguir mayusculas, vacios, tildes, y valores largos que
+# solo difieren al final (chocan si se recorta el nombre).
+SUCURSALES_RARAS: list[tuple[str, int]] = [
+    ("Norte/Sur", 7),
+    ("Norte_Sur", 4),
+    ("CON", 5),
+    ("nul", 3),
+    ("a:b", 6),
+    ("Zona*1", 2),
+    ("aux.txt", 4),
+    ("A" * 250 + "1", 3),
+    ("A" * 250 + "2", 2),
+    ("Sur", 9),
+    ("sur", 5),
+    ("", 6),
+    ("Ñandú", 8),
+    ("Córdoba", 10),
+    ("Bahía Blanca", 4),
+    ('Zona "x"? <2>', 2),
+    ("Dir\\Sub|1", 3),
+    ("Punto.", 2),
+    ("COM1", 2),
+    ("Centro", 12),
+]
+
+
+def grupo_fase3_nombres(salida: Path) -> list[str]:
+    rng = random.Random(SEMILLA + 30)
+    valores = [v for v, n in SUCURSALES_RARAS for _ in range(n)]
+    rng.shuffle(valores)
+    filas = [["ID", "Sucursal", "Importe"]]
+    for i, v in enumerate(valores, start=1):
+        filas.append([str(i), v, _importe_ar(rng.randint(1000, 900000))])
+    _escribir_csv(ruta_segura(salida, "fase3/nombres_raros.csv"), filas, ";", "utf-8-sig")
+    esperado = {
+        "_nota": "Calculado desde la definicion de los datos del generador, sin leer los archivos.",
+        "filas": len(valores),
+        "filas_por_valor": {v: n for v, n in SUCURSALES_RARAS},
+        "valores_distintos": len(SUCURSALES_RARAS),
+        "valores_distintos_sin_mayusculas": len({v.lower() for v, _ in SUCURSALES_RARAS}),
+    }
+    escribir_json(carpeta_de_esperados(salida) / "fase3_nombres.json", esperado)
+    return ["fase3/nombres_raros.csv"]
+
+
+# ---------------------------------------------------------------------------
+# Grupo grande: fase3_grandes (400k filas y 1,6 M filas para dividir)
+# ---------------------------------------------------------------------------
+
+FILAS_F3_400K = 400_000
+REGIONES_F3_DIVIDIR = {
+    "Norte": 1_200_000,  # mas que el maximo de Excel: se tiene que subdividir
+    "Sur": 100_000,
+    "Centro": 100_000,
+    "Cuyo": 100_000,
+    "Litoral": 100_000,
+}
+CLIENTES_F3 = 5_000  # grupos de tamano muy variable (peso 1/(i+1)) y mezclados en el archivo
+
+
+def _escribir_tabla_f3(destino: Path, regiones: list[str], rng: random.Random) -> None:
+    n = len(regiones)
+    clientes = rng.choices(
+        range(1, CLIENTES_F3 + 1),
+        cum_weights=list(itertools.accumulate(1 / (j + 1) for j in range(CLIENTES_F3))),
+        k=n,
+    )
+    with destino.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";", lineterminator="\r\n")
+        w.writerow(["ID", "Región", "Cliente", "Importe"])
+        for i in range(n):
+            w.writerow(
+                [
+                    i + 1,
+                    regiones[i],
+                    f"Cliente {clientes[i]:05d}",
+                    _importe_ar(rng.randint(1000, 90000)),
+                ]
+            )
+
+
+def grupo_fase3_grandes(salida: Path) -> list[str]:
+    nombres = ["Norte", "Sur", "Centro", "Cuyo", "Litoral"]
+    rng = random.Random(SEMILLA + 31)
+    # 400k: 5 regiones parejas. Pasa lo comodo de Excel (300.000) pero entra en una hoja.
+    r400 = [nombres[i % 5] for i in range(FILAS_F3_400K)]
+    rng.shuffle(r400)
+    _escribir_tabla_f3(ruta_segura(salida, "grandes/fase3_400k.csv"), r400, rng)
+    rg = [r for r, n in REGIONES_F3_DIVIDIR.items() for _ in range(n)]
+    rng.shuffle(rg)
+    _escribir_tabla_f3(ruta_segura(salida, "grandes/fase3_dividir_1600k.csv"), rg, rng)
+    esperado = {
+        "_nota": (
+            "Calculado desde la definicion de los datos del generador, sin leer los archivos. "
+            "Los clientes se sortean con peso 1/(i+1): el tamano de cada grupo lo calcula el test "
+            "contando el archivo."
+        ),
+        "filas": {"fase3_400k.csv": FILAS_F3_400K, "fase3_dividir_1600k.csv": len(rg)},
+        "clientes_posibles": CLIENTES_F3,
+        "regiones_400k": {r: FILAS_F3_400K // 5 for r in nombres},
+        "regiones_dividir": dict(REGIONES_F3_DIVIDIR),
+    }
+    escribir_json(carpeta_de_esperados(salida) / "fase3_grandes.json", esperado)
+    return ["grandes/fase3_400k.csv", "grandes/fase3_dividir_1600k.csv"]
+
+
+# ---------------------------------------------------------------------------
 # Registro de grupos (F0-21 y F0-22 suman acá)
 # ---------------------------------------------------------------------------
 
@@ -1400,8 +1512,10 @@ GRUPOS: list[tuple[str, Callable[[Path], list[str]], bool]] = [
     ("escenario_3", grupo_escenario_3, False),
     ("dificiles", grupo_dificiles, False),
     ("fase1", grupo_fase1, False),
+    ("fase3_nombres", grupo_fase3_nombres, False),
     ("escenario_grande", grupo_escenario_grande, True),
     ("rendimiento", grupo_rendimiento, True),
+    ("fase3_grandes", grupo_fase3_grandes, True),
 ]
 
 

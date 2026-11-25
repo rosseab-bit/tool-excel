@@ -10,12 +10,12 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas",
     "python-calamine",
-    "openpyxl",
+    "xlsxwriter",
     "pyarrow",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "xlwt"]
+dev = ["pytest", "ruff", "xlwt", "openpyxl"]
 build = ["pyinstaller"]
 
 [project.scripts]

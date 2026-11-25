@@ -17,6 +17,7 @@ Dataclasses y firmas públicas que cruzan de `src/excel_tool/core/` a `src/excel
 | `ColumnType`, `TypeDetection`, `ConversionResult`, funciones de `core/types.py` | 1 | Cerrado |
 | `core/progress`, `TableProfile`, `ColumnProfile`, `profile_table`, `value_counts`, `rows_with_value`, filtros, orden, páginas, `export_profile`, preferencias | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `ui/worker` (hilo + cola + progreso + cancelar) | 2 | Cerrado (OK PM, ADR-023); implementado |
+| `core/limits`, `core/split`, `core/output` (`save_result`, `split_file`), paso Guardar (UI) | 3 | Cerrado (OK PM, ADR-032); implementado |
 | Errores del core hacia la UI (cómo se muestran) | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `SizeEstimate`, `SizeCheck`, `SplitSpec`, `OutputSpec`, `save_result` | 3 | Borrador en PLAN.md §2 |
 | `AggregationSpec`, `JoinPlan`, `SourceSpec`, `SecondarySpec`, `KeyOptions`, `diagnose_join`, `run_join` | 4 | Borrador en PLAN.md §2 |
@@ -406,3 +407,174 @@ def check_memory(path: Path, *, format: str | None = None, margin: float = 0.8) 
 - Cancelación en la UI: al tocar Cancelar, el worker **cierra la ventana enseguida y descarta el resultado** aunque el hilo siga terminando (caso Excel). El hilo es daemon y su resultado se ignora.
 - (F2-05) `ReadResult.df`: columnas con dtype `str` y almacenamiento pyarrow (`pd.StringDtype("pyarrow")`), ya no `object`. Los vacíos siguen siendo `""`. En memoria, el CSV de 2M ocupa 316 MB (antes 1.177 MB).
 - (F2-05) Factores de memoria medidos para `check_memory`: base ~114 MB + tamaño del archivo × factor neto. Factores: CSV 4,4; xlsx 21; xls 16; xlsb sin medir (usar el de xlsx). `check_memory` usa factores con margen para el análisis: CSV 6, xlsx/xlsm/xlsb/ods 25, xls 20.
+
+### Fase 3
+
+#### `core/limits.py` (backend)
+```python
+Destination = Literal["excel", "google_sheets", "solo_guardar"]
+
+@dataclass(frozen=True)
+class Limits:                     # valores de limites_default.json, pisados por limites.json si existe
+    excel_max_rows: int           # 1.048.576 filas por hoja, CONTANDO el encabezado
+    excel_max_columns: int
+    excel_comfortable_rows: int   # 300.000
+    excel_comfortable_mb: float   # 50
+    gs_max_cells: int             # 20.000.000 por planilla, contando el encabezado
+    gs_max_import_mb: float       # 100
+    gs_comfortable_cells: int     # 5.000.000
+    gs_comfortable_mb: float      # 50
+
+def load_limits() -> Limits: ...
+# Orden: limites_default.json (importlib.resources) ← limites.json junto al ejecutable
+# (platform_utils.app_dir()) ← limites.json en platform_utils.user_data_dir(). Claves que falten o
+# valores inválidos → se usa el default de esa clave y una línea en el log (nunca rompe).
+
+@dataclass(frozen=True)
+class SizeEstimate:
+    rows: int                     # filas de datos (sin encabezado)
+    columns: int
+    cells: int                    # (rows + 1) × columns
+    approx_mb_xlsx: float         # por muestra de filas (≤ 10.000), bytes promedio por celda
+    approx_mb_csv: float
+
+@dataclass(frozen=True)
+class ColumnSuggestion:
+    column: str
+    parts: int                    # cantidad de valores distintos = cantidad de archivos
+    largest_part_rows: int
+    fits: bool                    # la parte más grande entra en el límite cómodo del destino
+
+@dataclass(frozen=True)
+class SizeCheck:
+    level: Literal["ok", "recomendado", "obligatorio"]   # 🟢 / 🟡 conviene dividir / 🔴 no entra
+    reasons: list[str]            # castellano, para mostrar tal cual, con números en formato argentino
+    suggested_parts: int          # mínimo para quedar dentro del límite cómodo (1 si ok)
+    suggested_rows_per_part: int
+    suggested_columns: list[ColumnSuggestion]           # vacío si no se pidieron
+
+def estimate(df: pd.DataFrame, *, sample_rows: int = 10_000) -> SizeEstimate: ...
+def check(est: SizeEstimate, destination: Destination, format: WriteFormat, *,
+          limits: Limits | None = None, suggestions: list[ColumnSuggestion] | None = None) -> SizeCheck: ...
+def suggest_split_columns(df: pd.DataFrame, destination: Destination, format: WriteFormat, *,
+                          limits: Limits | None = None, max_parts: int = 50,
+                          progress: ProgressCallback | None = None,
+                          cancel: CancelToken | None = None) -> list[ColumnSuggestion]: ...
+```
+- Reglas de `check`:
+  - **Excel:** 🔴 si filas + 1 > `excel_max_rows` o columnas > `excel_max_columns`. 🟡 si filas > cómodas o MB > cómodos.
+  - **Google Sheets:** 🔴 si celdas > `gs_max_cells` o MB > `gs_max_import_mb`. 🟡 si pasa lo cómodo.
+  - **Solo guardar:** 🟢 en CSV. Con formato xlsx igual aplica el límite duro de filas por hoja de Excel (el archivo no puede tener más).
+- `suggest_split_columns` usa `explore.value_counts`. Solo propone columnas con 2 a `max_parts` valores distintos. Ordena primero las que entran (`fits`) y, entre esas, las de menos partes.
+- Los límites están **solo** acá: nadie más usa 1048576 ni 20_000_000.
+
+#### `core/split.py` (backend)
+```python
+@dataclass(frozen=True)
+class SplitSpec:
+    mode: Literal["rows", "rows_keep_groups", "by_value", "sheets"]
+    rows_per_part: int | None = None        # rows, rows_keep_groups, sheets; y subdivisión en by_value
+    group_column: str | None = None         # rows_keep_groups: no cortar un mismo valor entre partes
+    value_columns: list[str] | None = None  # by_value
+    name_pattern: str | None = None         # None → "{nombre}_parte_{n:02d}_de_{total:02d}" / "{nombre}_{valor}"
+
+@dataclass(frozen=True)
+class PartPlan:                     # para la vista previa: sin datos
+    name: str                       # nombre de archivo (sin extensión) u hoja, ya válido en Windows
+    rows: int
+    value: tuple[str, ...] | None   # by_value
+    first_row: int                  # N.º de fila del original (desde 1) de la primera fila de la parte
+    last_row: int
+
+def plan_split(df: pd.DataFrame, spec: SplitSpec, *, base_name: str,
+               max_rows_per_part: int | None = None) -> list[PartPlan]: ...
+def split_dataframe(df: pd.DataFrame, spec: SplitSpec, *, base_name: str,
+                    max_rows_per_part: int | None = None) -> Iterator[tuple[PartPlan, pd.DataFrame]]: ...
+```
+- **Generación:** `split_dataframe` arma cada parte recién cuando se pide (iterador) y nunca todas juntas.
+- **`plan_split` y `split_dataframe`:** dan exactamente las mismas partes, en el mismo orden.
+- **`rows_keep_groups`:** un grupo nunca queda en dos partes. Si un solo grupo supera `rows_per_part`, va entero en su propia parte, con aviso en el log.
+- **`by_value`:** si una parte supera `max_rows_per_part`, se subdivide por filas: `{nombre}_{valor}_parte_1_de_2`.
+- **Vacíos:** el valor vacío se nombra "(vacío)" → "vacio".
+- **Nombres:**
+  - pasan por `platform_utils.safe_filename`, que cubre `/`, `CON`, `NUL`, etc.;
+  - se cortan a un largo seguro;
+  - si hay repetidos, se les agrega " (2)";
+  - en `sheets`, cumplen las reglas de hoja de Excel (≤ 31, sin `[]:*?/\`).
+
+#### `core/output.py` (backend)
+```python
+@dataclass(frozen=True)
+class OutputSpec:
+    path: Path                      # archivo destino (sin división) o archivo "base" (con división:
+                                    # se crea la carpeta <carpeta de path>/<nombre de path>/)
+    format: WriteFormat
+    destination: Destination
+    split: SplitSpec | None = None
+    write_index: bool = True        # _indice.xlsx en la carpeta de partes
+    sheet_name: str = "Datos"
+    column_types: dict[str, ColumnType] | None = None
+
+@dataclass(frozen=True)
+class PartResult:
+    path: Path
+    sheet: str | None
+    rows: int
+    value: tuple[str, ...] | None
+    first_row: int
+    last_row: int
+
+@dataclass(frozen=True)
+class SaveResult:
+    files: list[Path]               # todos los archivos escritos (incluye el índice)
+    folder: Path | None             # carpeta creada (si se dividió en archivos)
+    parts: list[PartResult]
+    rows_total: int                 # = suma de rows de parts = len(df), verificado
+    warnings: list[str]             # castellano (ej. "La parte 3 pesa 120 MB: Google Sheets puede no importarla")
+    unconverted: dict[str, int]     # columna → celdas que quedaron como texto
+
+def save_result(df: pd.DataFrame, spec: OutputSpec, *,
+                progress: ProgressCallback | None = None,
+                cancel: CancelToken | None = None) -> SaveResult: ...
+def split_file(path: Path, read: ReadOptions, spec: OutputSpec, *,
+               progress=None, cancel=None) -> SaveResult: ...   # solo CSV en Fase 3, por partes, sin cargar todo
+```
+- **Antes de escribir:**
+  - Llama a `limits.check`.
+  - Si el resultado es 🔴 y `split` es None, lanza `ExcelToolError` con el motivo. La UI no debería permitirlo.
+  - `mode="sheets"` con `destination="google_sheets"` → `ExcelToolError`.
+- **Escritura:**
+  - Escribe cada parte a medida que la genera.
+  - Al terminar, verifica que la suma de las filas de las partes dé el total. Si no da, lanza `ExcelToolError` y deja el detalle en el log.
+- **Carpeta de partes:**
+  - Si la carpeta ya existe, se usa `<nombre> (2)`. Nunca se pisa nada sin aviso.
+  - Si el destino es un archivo suelto que ya existe, se pisa: la UI ya lo confirmó en el diálogo de guardar.
+- **Cancelación o error a mitad de camino:** se borran **solo** los archivos que creó esta llamada, y también la carpeta si la creó y quedó vacía. Después se relanza `Cancelado` o el error.
+- **xlsx:** cada hoja va con la primera fila congelada y el filtro activado. Es una opción nueva de `WriteOptions` (`freeze_header: bool = True`, `autofilter: bool = True`).
+- **Índice:** `_indice.xlsx` tiene las columnas Archivo, Hoja, Filas, Desde fila, Hasta fila y Valor. Se escribe con `write_table`.
+- **`WriteResult` gana `warnings: list[str]`:** lo pedía la nota de la Fase 1.
+
+#### Paso "Guardar" (frontend, `ui/guardar.py`)
+```python
+def abrir_guardar(parent: tk.Misc, df: pd.DataFrame, *, nombre_sugerido: str,
+                  on_terminado: Callable[[SaveResult], None] | None = None,
+                  claves_sugeridas: list[str] | None = None,
+                  column_types: dict[str, ColumnType] | None = None) -> VentanaGuardar | None: ...
+# column_types: tipos detectados (perfil); con xlsx salen números y fechas reales (ADR-021, decisión de la Fase 3)
+```
+- **1. Destino:** Excel, Google Sheets o "Solo guardarlo".
+  - Recuerda la elección en `Preferences.last_destination`. La primera vez queda elegido Excel (ADR-032).
+- **2. Semáforo:** sale de `limits.estimate` y `check`. `suggest_split_columns` corre en el worker, a pedido o al abrir si la tabla tiene menos de 2M de filas.
+- **3. Formas de dividir:**
+  - por filas, con la cantidad de partes sugerida;
+  - sin cortar grupos (`claves_sugeridas` la preselecciona);
+  - por valor de una columna, con las sugerencias;
+  - en varias hojas, que no se ofrece para Google Sheets.
+
+  Debajo, la vista previa de las partes con `plan_split`.
+- **4. Formato:**
+  - Excel: xlsx o "CSV para Excel".
+  - Google Sheets: xlsx o "CSV para Google Sheets".
+  - Solo guardar: CSV.
+- **5. Guardar:** diálogo de guardar y después `save_result` en el worker, con progreso y Cancelar. Al terminar muestra "Se guardaron N archivos con M filas en total (coincide con el resultado ✅)" y el botón "Abrir carpeta" (`platform_utils.open_folder`).
+- **La UI no calcula:** todo lo que muestra sale del core.

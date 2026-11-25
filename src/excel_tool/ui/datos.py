@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from collections.abc import Callable
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from excel_tool.core.explore import (
@@ -21,9 +23,10 @@ from excel_tool.core.explore import (
     rows_with_value,
     sort_rows,
 )
+from excel_tool.ui import guardar
 from excel_tool.ui.distintos import mensaje_de
 from excel_tool.ui.formato import formatear_numero
-from excel_tool.ui.grilla import Grilla
+from excel_tool.ui.grilla import COLUMNA_FILA, Grilla
 from excel_tool.ui.worker import run_in_background
 
 log = logging.getLogger(__name__)
@@ -38,6 +41,15 @@ OPERACIONES = {
     "es menor que": "menor",
 }
 SIN_VALOR = {"vacio", "no_vacio"}
+TIPOS_QUE_SIRVEN = {"entero", "decimal", "fecha", "fecha_hora", "si_no"}
+TEXTO_EXPORTAR = "Exportar lo filtrado…"
+TEXTO_GUARDAR_TODO = "Guardar estas filas…"
+PREGUNTA_OCULTAS = (
+    "Hay columnas ocultas en la tabla.\n\n"
+    "¿Querés guardar todas las columnas?\n\n"
+    "Sí: se guardan todas, también las ocultas.\n"
+    "No: se guardan solo las que están a la vista."
+)
 
 
 class FilaCondicion:
@@ -95,6 +107,8 @@ class PanelDatos(ttk.Frame):
         self.filas: pd.Index = pd.RangeIndex(0)
         self.condiciones: list[FilaCondicion] = []
         self.aviso_valor: str | None = None
+        self.nombre_archivo = "resultado"
+        self.claves: list[str] = []
         self._orden: tuple[str, bool] | None = None
         self._version = 0
         self._page_size = page_size
@@ -113,6 +127,10 @@ class PanelDatos(ttk.Frame):
         self.boton_agregar.pack(side="left")
         self.boton_aplicar = ttk.Button(botones, text="Aplicar", command=self.aplicar)
         self.boton_aplicar.pack(side="left", padx=6)
+        self.boton_exportar = ttk.Button(
+            botones, text=TEXTO_GUARDAR_TODO, command=self.exportar, state="disabled"
+        )
+        self.boton_exportar.pack(side="right", padx=(8, 0))
         self.etiqueta_conteo = ttk.Label(botones, text="")
         self.etiqueta_conteo.pack(side="right")
 
@@ -136,6 +154,11 @@ class PanelDatos(ttk.Frame):
         self.nombres = [c.name for c in perfil.columns_profile]
         self.tipos = {c.name: c.detected_type for c in perfil.columns_profile}
         self._orden = None
+        self.claves = [c.name for c in perfil.columns_profile if getattr(c, "is_unique", False)]
+        try:
+            self.nombre_archivo = Path(perfil.file.path).stem or "resultado"
+        except (AttributeError, TypeError):
+            self.nombre_archivo = "resultado"
         for fila in list(self.condiciones):
             self.quitar_condicion(fila)
         self._poner_aviso(None)
@@ -161,6 +184,10 @@ class PanelDatos(ttk.Frame):
                 f"Mostrando {formatear_numero(len(self.filas))} de {formatear_numero(total)} filas"
             )
         )
+        self.boton_exportar.configure(
+            text=TEXTO_EXPORTAR if len(self.filas) < total else TEXTO_GUARDAR_TODO
+        )
+        self.boton_exportar.state(["!disabled"] if self.df is not None else ["disabled"])
 
     def _poner_aviso(self, texto: str | None) -> None:
         self.aviso_valor = texto
@@ -296,3 +323,64 @@ class PanelDatos(ttk.Frame):
 
     def _con_orden_total(self, df: Any) -> pd.Index:
         return self._con_orden(pd.RangeIndex(len(df)))
+
+    # ---- exportar lo que se ve ----
+    def _son_todas_en_orden(self) -> bool:
+        """Las filas son todas y en el orden del archivo: no hace falta copiar nada."""
+        return len(self.filas) == len(self.df) and self.filas.equals(pd.RangeIndex(len(self.df)))
+
+    def _columnas_a_guardar(self) -> list[str] | None:
+        """None = todas. Si hay columnas ocultas, pregunta si se guardan o no."""
+        visibles = [n for n in self.grilla.columnas_visibles if n != COLUMNA_FILA]
+        ocultas = [n for n in self.nombres if n not in visibles]
+        if not ocultas or not visibles:
+            return None
+        if messagebox.askyesno("Guardar las filas", PREGUNTA_OCULTAS, parent=self.ventana):
+            return None
+        return [n for n in self.nombres if n in visibles]
+
+    def exportar(self) -> None:
+        """Abre el paso Guardar con las filas filtradas y ordenadas que se ven en la grilla."""
+        if self.df is None:
+            return
+        df, filas = self.df, self.filas
+        columnas = self._columnas_a_guardar()
+        filtrado = len(filas) < len(df)
+        nombre = f"{self.nombre_archivo}_filtrado" if filtrado else self.nombre_archivo
+        todas = self._son_todas_en_orden()
+        tipos_perfil, claves = dict(self.tipos), list(self.claves)
+
+        def abrir(tabla: Any) -> None:
+            nombres = [str(c) for c in tabla.columns]
+            tipos = {n: tipos_perfil[n] for n in nombres if tipos_perfil.get(n) in TIPOS_QUE_SIRVEN}
+            guardar.abrir_guardar(
+                self.ventana,
+                tabla,
+                nombre_sugerido=nombre,
+                claves_sugeridas=[c for c in claves if c in nombres],
+                column_types=tipos,
+            )
+
+        if todas and columnas is None:
+            abrir(df)
+            return
+
+        def trabajo(progress, cancel):
+            base = df if todas else df.iloc[np.asarray(filas, dtype=np.int64)]
+            if columnas is not None:
+                base = base[columnas]
+            base.index = pd.RangeIndex(len(base))  # copia nueva: se puede renumerar
+            return base
+
+        def fallo(exc):
+            messagebox.showerror("Guardar las filas", mensaje_de(exc), parent=self.ventana)
+
+        run_in_background(
+            self.ventana,
+            trabajo,
+            title="Preparando las filas",
+            on_success=abrir,
+            on_error=fallo,
+            cancellable=False,
+            modal=False,
+        )

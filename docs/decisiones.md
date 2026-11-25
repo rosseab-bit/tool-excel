@@ -35,10 +35,12 @@ Las decisiones nuevas se agregan al final. No se borran: si una cambia, se agreg
 - ADR-029 · 2026-11-25 · 2 · Corrige los tamaños de ADR-028 (se habían medido con pyarrow roto dentro del ejecutable): con pyarrow funcionando, el ejecutable pasa de 100 a 206 MB en carpeta y de 40 a 76 MB comprimido. Del `.spec` solo se sacan las partes de pyarrow que nada enlaza (flight, s3, orc, fuentes y tests). El self-test exige pyarrow real. Para achicar más habría que dejar pyarrow o compilarlo a medida (nivel 3).
 - ADR-030 · 2026-11-25 · 2 · Python en Windows: se acepta 3.14 (el del PM; todas las dependencias tienen versión para 3.14 y la suite pasa). `dev.ps1` prefiere 3.12 si está instalado y si no usa el más nuevo ≥ 3.12. Versiones probadas en el README.
 - ADR-031 · 2026-11-25 · 3 · (PM) La PC con Windows usada no permite ejecutar el `.exe`. La Fase 2 cierra en Linux; el resto de la prueba de Windows (compilar y probar el `.exe`, explorador a mano, F2-32) se hace más adelante en la PC propia del PM, con el checklist de `docs/qa/fase-2.md`. Ya confirmado en Windows: instalación con `dev.bat`, 545 tests, la app abre y lee un Excel desde la consola.
+- ADR-032 · 2026-11-25 · 3 · Fase 3 (OK del PM): el paso "Guardar" (UI, §3.3) se adelanta de la Fase 5 a la Fase 3, junto con "Exportar lo filtrado" y el semáforo del explorador. Se mide `xlsxwriter` (sin agregarla; la decisión vuelve al PM con números). Destino elegido la primera vez: **Excel**. Límites cómodos: Excel ~300.000 filas o 50 MB por archivo; Google Sheets ~5.000.000 de celdas o 50 MB. Responde la pregunta abierta 2.
+- ADR-033 · 2026-11-25 · 3 · (OK del PM) Reemplaza ADR-015: el escritor de .xlsx pasa a `xlsxwriter` (`constant_memory`), sin mantener openpyxl como respaldo para escribir. Medido en F3-04: 1,6–1,8× más rápido (500k filas con tipos 79 → 45 s), hasta −240 MB de pico, mismo contenido releído, +~0,5 MB el `.exe`. openpyxl queda solo donde haga falta en tests (verificar formato) salvo que el backend proponga sacarlo. Tarea F3-06, después de F3-03.
 
 ## Preguntas abiertas
 1. Tamaño típico de los archivos (pandas en memoria vs. streaming/DuckDB). Respondida: PCs de 8 GB (ADR-023), archivos de hasta ~1M de filas (ADR-026).
-2. Destino más usado: Excel o Google Sheets (default de la primera vez).
+2. Destino más usado: Excel o Google Sheets (default de la primera vez). Respondida: Excel (ADR-032).
 3. ¿Firmar el .exe? (sin firma, Windows SmartScreen muestra advertencia).
 4. Distro/versión de Linux de los usuarios finales, si alguno usa Linux.
 5. PC o VM con Windows para pruebas y compilación. **Bloquea el cierre de la Fase 0** (sin eso cierra solo la parte Linux).

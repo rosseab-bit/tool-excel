@@ -5,12 +5,19 @@ from __future__ import annotations
 import codecs
 import csv
 import logging
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from excel_tool.core.errors import ArchivoBloqueado, ArchivoIlegible, ArchivoNoEncontrado
+from excel_tool.core.errors import (
+    ArchivoBloqueado,
+    ArchivoIlegible,
+    ArchivoNoEncontrado,
+    ExcelToolError,
+)
 from excel_tool.core.io import CsvOptions, ReadOptions, ReadResult
 from excel_tool.core.io.header import detect_header_row, normalize_column_names
 from excel_tool.core.progress import CancelToken, ProgressCallback, ProgressEvent, ThrottledProgress
@@ -299,4 +306,269 @@ def read_csv(
     )
 
 
-__all__ = ["detect_csv_options", "read_csv"]
+# ------------------------------------------------------------------ lectura por bloques (F3-05)
+
+
+@dataclass
+class CsvStreamInfo:
+    columns: list[str]
+    csv_options: CsvOptions
+    header_row: int
+    renamed_columns: dict[str, str]
+    warnings: list[str]
+    total_bytes: int = 0
+
+
+def _envolver_lectura(exc: OSError) -> Exception:
+    if isinstance(exc, PermissionError):
+        return ArchivoBloqueado("Cerrá el archivo en Excel y volvé a intentar.", str(exc))
+    if isinstance(exc, FileNotFoundError):
+        return ArchivoNoEncontrado(
+            "No se encontró el archivo. Fijate si se movió o se borró.", str(exc)
+        )
+    return ArchivoIlegible("No se pudo leer el archivo.", str(exc))
+
+
+class CsvBlockReader:
+    """Lee un CSV por bloques de `FILAS_POR_BLOQUE` filas, sin cargarlo entero.
+
+    Mismas reglas que `read_csv` (texto, encabezado detectado, nombres normalizados, filas vacías
+    del final descartadas), pero entrega los datos de a bloques (DataFrames con `columns` y
+    índice desde 0). Se usa como `with CsvBlockReader(path, options) as lector:`.
+
+    Un `UnicodeDecodeError` (texto que no es del encoding usado) se deja pasar tal cual, para que
+    quien llama pueda reintentar con otro encoding. Las filas con más campos que las primeras
+    2000 dan `ArchivoIlegible` (no hay forma de seguir leyendo por bloques sin perder columnas).
+    """
+
+    def __init__(self, path: Path, options: ReadOptions | None = None) -> None:
+        self.path = Path(path)
+        options = options or ReadOptions()
+        opciones = options.csv or detect_csv_options(self.path)
+        self._f: Any = None
+        self._lector: Any = None
+        try:
+            if options.csv is not None:
+                _leer_bytes_iniciales(self.path)
+            fila_enc = options.header_row
+            if fila_enc is None:
+                fila_enc = detect_header_row(
+                    _filas_muestra(self.path, opciones, FILAS_MUESTRA_ENCABEZADO)
+                )
+            ancho = _ancho_maximo(self.path, opciones)
+            self._f = self.path.open("rb")
+            self._lector = _leer_pandas(self._f, opciones, ancho, None)
+            try:
+                primero = next(self._lector)
+            except StopIteration:
+                primero = None
+            except pd.errors.EmptyDataError:
+                primero = None
+            if primero is None or fila_enc >= len(primero):
+                raise ArchivoIlegible(
+                    "El archivo no tiene datos en la fila de encabezado indicada."
+                    if primero is not None
+                    else "El archivo está vacío.",
+                    f"{self.path}: sin filas suficientes",
+                )
+        except csv.Error as e:
+            self.close()
+            raise ArchivoIlegible("El archivo está dañado o no se pudo leer.", str(e)) from e
+        except pd.errors.ParserError as e:
+            self.close()
+            raise self._error_de_columnas(e) from e
+        except OSError as e:
+            self.close()
+            raise _envolver_lectura(e) from e
+        except BaseException:
+            self.close()
+            raise
+        nombres, renamed, avisos = normalize_column_names(
+            [str(x) for x in primero.iloc[fila_enc].tolist()]
+        )
+        self.info = CsvStreamInfo(
+            columns=nombres,
+            csv_options=opciones,
+            header_row=fila_enc,
+            renamed_columns=renamed,
+            warnings=avisos,
+            total_bytes=max(self.path.stat().st_size, 1),
+        )
+        self._primero = primero.iloc[fila_enc + 1 :]
+        self.rows = 0  # filas de datos entregadas hasta ahora
+
+    @staticmethod
+    def _error_de_columnas(e: Exception) -> ArchivoIlegible:
+        return ArchivoIlegible(
+            "Hay filas con más columnas que las del comienzo del archivo; no se puede "
+            "procesar sin abrirlo entero.",
+            str(e),
+        )
+
+    @property
+    def bytes_read(self) -> int:
+        try:
+            return min(self._f.tell(), self.info.total_bytes) if self._f else 0
+        except (OSError, ValueError):
+            return 0
+
+    def close(self) -> None:
+        if self._lector is not None:
+            try:
+                self._lector.close()
+            except Exception:  # noqa: BLE001 - cerrar nunca debe tapar el error original
+                log.debug("No se pudo cerrar el lector", exc_info=True)
+            self._lector = None
+        if self._f is not None:
+            self._f.close()
+            self._f = None
+
+    def __enter__(self) -> CsvBlockReader:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def _bloques_crudos(self) -> Iterator[pd.DataFrame]:
+        yield self._primero
+        if self._lector is None:
+            return
+        try:
+            yield from self._lector
+        except pd.errors.ParserError as e:
+            raise self._error_de_columnas(e) from e
+        except csv.Error as e:
+            raise ArchivoIlegible("El archivo está dañado o no se pudo leer.", str(e)) from e
+        except OSError as e:
+            raise _envolver_lectura(e) from e
+
+    def __iter__(self) -> Iterator[pd.DataFrame]:
+        # Las filas vacías se retienen: solo se descartan si son las últimas del archivo.
+        pendientes: list[pd.DataFrame] = []
+        for crudo in self._bloques_crudos():
+            bloque = crudo.reset_index(drop=True)
+            bloque.columns = self.info.columns
+            recortado = _recortar_vacias_al_final(bloque)
+            if len(recortado) == 0:
+                pendientes.append(bloque)
+                continue
+            for p in pendientes:
+                self.rows += len(p)
+                yield p
+            pendientes = []
+            if len(recortado) < len(bloque):
+                pendientes.append(bloque.iloc[len(recortado) :])
+            self.rows += len(recortado)
+            yield recortado
+
+
+def read_csv_exact(path: Path, options: CsvOptions) -> pd.DataFrame:
+    """CSV ya escrito por esta app (encabezado en la primera fila) como texto, sin tocar nada:
+    ni se descartan filas vacías ni se renombran columnas. Para convertir partes a xlsx."""
+    try:
+        return pd.read_csv(
+            Path(path),
+            sep=options.separator,
+            encoding=options.encoding,
+            header=0,
+            dtype=str,
+            keep_default_na=False,
+            na_filter=False,
+            skip_blank_lines=False,
+            quotechar='"',
+            engine="c",
+        )
+    except OSError as e:
+        raise _envolver_lectura(e) from e
+    except (UnicodeDecodeError, pd.errors.ParserError) as e:
+        raise ArchivoIlegible("No se pudo leer una parte recién escrita.", str(e)) from e
+
+
+# ------------------------------------------------------------------ escritura incremental CSV
+
+# Igual que `_CSV_FORMATOS` de writer.py (un test verifica que coincidan):
+# formato -> (separador, encoding)
+CSV_ESTILOS = {
+    "csv_excel": (";", "utf-8-sig"),
+    "csv_google": (",", "utf-8"),
+    "csv_standard": (",", "utf-8-sig"),
+}
+
+
+@dataclass
+class CsvPartWriter:
+    """Escribe un CSV de a bloques: abre, escribe el encabezado, agrega bloques y cierra.
+
+    Los bloques se escriben como texto, tal cual (sin convertir números ni fechas), con el
+    mismo formato que `write_table` (separador, encoding, `\r\n`, `newline=""`).
+    """
+
+    path: Path
+    formato: str
+    columns: list[str]
+    rows: int = 0
+    _f: Any = field(default=None, repr=False)
+    _sep: str = field(default=";", repr=False)
+
+    def __post_init__(self) -> None:
+        if self.formato not in CSV_ESTILOS:
+            raise ExcelToolError("Formato de salida no reconocido.", str(self.formato))
+        self._sep, encoding = CSV_ESTILOS[self.formato]
+        self.path = Path(self.path)
+        try:
+            self._f = self.path.open("w", encoding=encoding, newline="")
+            pd.DataFrame(columns=self.columns).to_csv(
+                self._f, sep=self._sep, index=False, header=True, lineterminator="\r\n"
+            )
+        except OSError as e:
+            self.close()
+            raise _error_de_escritura(e) from e
+
+    def write(self, bloque: pd.DataFrame) -> None:
+        if self._f is None:
+            raise ExcelToolError("Se intentó escribir en un archivo ya cerrado.")
+        try:
+            bloque.to_csv(self._f, sep=self._sep, index=False, header=False, lineterminator="\r\n")
+        except OSError as e:
+            raise _error_de_escritura(e) from e
+        self.rows += len(bloque)
+
+    def close(self) -> None:
+        if self._f is not None:
+            f, self._f = self._f, None
+            try:
+                f.close()
+            except OSError as e:
+                raise _error_de_escritura(e) from e
+
+    def __enter__(self) -> CsvPartWriter:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+def _error_de_escritura(exc: OSError) -> ExcelToolError:
+    if isinstance(exc, PermissionError):
+        return ArchivoBloqueado(
+            "No se pudo guardar el archivo. Si está abierto en Excel, cerralo y probá de nuevo.",
+            str(exc),
+        )
+    if isinstance(exc, FileNotFoundError):
+        return ExcelToolError("No se pudo guardar el archivo: la carpeta no existe.", str(exc))
+    return ExcelToolError(
+        "No se pudo guardar el archivo. Revisá que haya espacio en el disco "
+        "y que el nombre sea válido.",
+        str(exc),
+    )
+
+
+__all__ = [
+    "CSV_ESTILOS",
+    "CsvBlockReader",
+    "CsvPartWriter",
+    "CsvStreamInfo",
+    "detect_csv_options",
+    "read_csv",
+    "read_csv_exact",
+]

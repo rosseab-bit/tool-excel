@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -59,6 +60,8 @@ class WriteOptions:
     sheet_name: str = "Datos"  # xlsx
     column_types: dict[str, ColumnType] | None = None
     # None -> todo como texto, tal cual. dict -> ver docs/contratos.md (reglas de escritura).
+    freeze_header: bool = True  # xlsx: primera fila congelada
+    autofilter: bool = True  # xlsx: filtro sobre el rango de datos
 
 
 @dataclass
@@ -66,15 +69,27 @@ class WriteResult:
     path: Path
     rows: int
     unconverted: dict[str, list[tuple[int, str]]]  # columna -> [(fila, valor)] quedaron texto
+    warnings: list[str] = field(default_factory=list)  # castellano, ej. hoja renombrada
 
 
 from excel_tool.core.errors import (  # noqa: E402
     ArchivoNoEncontrado,
     FormatoNoSoportado,
 )
-from excel_tool.core.io.csv import detect_csv_options, read_csv  # noqa: E402
+from excel_tool.core.io.csv import (  # noqa: E402
+    CsvBlockReader,
+    CsvPartWriter,
+    CsvStreamInfo,
+    detect_csv_options,
+    read_csv,
+    read_csv_exact,
+)
 from excel_tool.core.io.excel import list_excel_sheets, read_excel  # noqa: E402
-from excel_tool.core.io.writer import write_sheets_impl, write_table_impl  # noqa: E402
+from excel_tool.core.io.writer import (  # noqa: E402
+    csv_bytes_impl,
+    write_sheets_impl,
+    write_table_impl,
+)  # noqa: E402
 
 _EXT_EXCEL = {".xlsx", ".xlsm", ".xlsb", ".xls", ".ods"}
 _EXT_CSV = {".csv", ".txt"}
@@ -133,22 +148,66 @@ def list_sheets(
     return [SheetSummary(name=path.name, rows=len(resultado.df), columns=len(resultado.df.columns))]
 
 
-def write_table(df: pd.DataFrame, path: Path, options: WriteOptions) -> WriteResult:
-    """Guarda una tabla como CSV (3 estilos) o xlsx. Sin límites (eso es de save_result)."""
-    return write_table_impl(df, path, options)
+def write_table(
+    df: pd.DataFrame,
+    path: Path,
+    options: WriteOptions,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> WriteResult:
+    """Guarda una tabla como CSV (3 estilos) o xlsx. Sin límites (eso es de save_result).
+
+    `progress` (por filas) y `cancel` son opcionales. Si se cancela, no queda ningún archivo nuevo
+    y el destino que ya existía queda como estaba.
+    """
+    return write_table_impl(df, path, options, progress, cancel)
 
 
 def write_sheets(
-    sheets: dict[str, pd.DataFrame],
+    sheets: Mapping[str, pd.DataFrame] | Iterable[tuple[str, pd.DataFrame]],
     path: Path,
     column_types: dict[str, dict[str, ColumnType]] | None = None,
+    *,
+    common_types: dict[str, ColumnType] | None = None,
+    freeze_header: bool = True,
+    autofilter: bool = True,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
 ) -> list[WriteResult]:
-    """Guarda varias hojas en un solo .xlsx."""
-    return write_sheets_impl(sheets, path, column_types)
+    """Guarda varias hojas en un solo .xlsx.
+
+    `sheets` puede ser un dict o un iterable (o generador) de pares (nombre, tabla): las hojas se
+    escriben una por una, sin juntarlas en memoria. `common_types` aplica a las hojas que no
+    figuran en `column_types`.
+    """
+    return write_sheets_impl(
+        sheets,
+        path,
+        column_types,
+        common_types=common_types,
+        freeze_header=freeze_header,
+        autofilter=autofilter,
+        progress=progress,
+        cancel=cancel,
+    )
+
+
+def csv_bytes(
+    df: pd.DataFrame, options: WriteOptions | None = None, *, header: bool = False
+) -> bytes:
+    """Cómo quedaría la tabla como CSV (en memoria, UTF-8 sin BOM), para medir su tamaño.
+
+    Sin `options` usa el estilo "CSV para Excel". No escribe nada en disco.
+    """
+    return csv_bytes_impl(df, options, header)
 
 
 __all__ = [
+    "CsvBlockReader",
     "CsvOptions",
+    "CsvPartWriter",
+    "CsvStreamInfo",
     "FileFormat",
     "ReadOptions",
     "ReadResult",
@@ -156,8 +215,10 @@ __all__ = [
     "WriteFormat",
     "WriteOptions",
     "WriteResult",
+    "csv_bytes",
     "detect_csv_options",
     "list_sheets",
+    "read_csv_exact",
     "read_table",
     "write_sheets",
     "write_table",

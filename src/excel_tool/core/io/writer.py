@@ -1,23 +1,29 @@
 """Escritura de CSV y xlsx. Contrato: docs/contratos.md § Fase 1 (reglas de escritura).
 
 Sin límites de tamaño ni división: eso es de `output.save_result` (Fase 3).
+Los archivos se escriben en un temporal y se renombran al final (cancelar no deja restos).
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import logging
+import os
 import re
+import tempfile
+from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.cell import WriteOnlyCell
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-from openpyxl.utils import get_column_letter
+import xlsxwriter
+import xlsxwriter.exceptions
 
 from excel_tool.core.errors import ArchivoBloqueado, ExcelToolError
+from excel_tool.core.progress import CancelToken, ProgressCallback, ProgressEvent, ThrottledProgress
 from excel_tool.core.types import to_date, to_number
 
 if TYPE_CHECKING:
@@ -38,6 +44,11 @@ _FMT_FECHA = "dd/mm/yyyy"
 _FMT_FECHA_HORA = "dd/mm/yyyy hh:mm:ss"
 _HOJA_INVALIDA = re.compile(r"[\[\]:*?/\\]")
 _MAX_HOJA = 31
+_TANDA_CSV = 50_000  # filas por tanda al escribir CSV (cancelar / avance)
+_MAX_CELDA = 32_767  # caracteres por celda en Excel
+_ANIO_MINIMO = 1900  # Excel no muestra fechas anteriores
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # lo que Excel no admite
+_CADA_FILAS = 5_000  # xlsx: cada cuántas filas se mira cancelar y se informa
 
 
 def nombre_de_hoja(nombre: str, usados: set[str] | None = None) -> str:
@@ -141,11 +152,31 @@ def _envolver(path: Path, accion) -> None:
         ) from exc
 
 
-def _escribir_csv(df: pd.DataFrame, path: Path, formato: str, options: WriteOptions) -> WriteResult:
-    from excel_tool.core.io import WriteResult
+def _escribir_atomico(path: Path, escribir: Callable[[Path], None]) -> None:
+    """Escribe en un temporal junto al destino y recién al final lo pone en su lugar.
 
-    sep, encoding, decimal = _CSV_FORMATOS[formato]
-    series, clases, fallidas = _columnas_convertidas(df, options.column_types)
+    Si se cancela o falla a mitad de camino, el destino queda como estaba y no sobra nada.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+
+    def accion() -> None:
+        try:
+            escribir(tmp)
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            raise
+
+    _envolver(path, accion)
+
+
+def _tabla_csv(
+    df: pd.DataFrame, formato: str, column_types: dict[str, ColumnType] | None
+) -> tuple[pd.DataFrame, dict[str, list[tuple[int, str]]]]:
+    """Tabla de texto lista para `to_csv` y las celdas que no se pudieron convertir."""
+    decimal = _CSV_FORMATOS[formato][2]
+    series, clases, fallidas = _columnas_convertidas(df, column_types)
     salida = pd.concat(
         [
             _a_texto_csv(s, c, decimal).reset_index(drop=True)
@@ -154,132 +185,311 @@ def _escribir_csv(df: pd.DataFrame, path: Path, formato: str, options: WriteOpti
         axis=1,
     )
     salida.columns = list(df.columns)
+    return salida, fallidas
 
-    def escribir() -> None:
-        with path.open("w", encoding=encoding, newline="") as f:
-            salida.to_csv(f, sep=sep, index=False, lineterminator="\r\n")
 
-    _envolver(path, escribir)
+def csv_bytes_impl(df: pd.DataFrame, options: WriteOptions | None, header: bool) -> bytes:
+    formato = options.format if options is not None else "csv_excel"
+    if formato not in _CSV_FORMATOS:
+        formato = "csv_excel"
+    sep = _CSV_FORMATOS[formato][0]
+    tipos = options.column_types if options is not None else None
+    salida, _ = _tabla_csv(df, formato, tipos)
+    buffer = io.StringIO()
+    salida.to_csv(buffer, sep=sep, index=False, header=header, lineterminator="\r\n")
+    return buffer.getvalue().encode("utf-8")
+
+
+def _escribir_csv(
+    df: pd.DataFrame,
+    path: Path,
+    formato: str,
+    options: WriteOptions,
+    progress: ProgressCallback | None,
+    cancel: CancelToken | None,
+) -> WriteResult:
+    from excel_tool.core.io import WriteResult
+
+    sep, encoding, _ = _CSV_FORMATOS[formato]
+    salida, fallidas = _tabla_csv(df, formato, options.column_types)
+    total = len(salida)
+    report = ThrottledProgress(progress)
+
+    def escribir(tmp: Path) -> None:
+        with tmp.open("w", encoding=encoding, newline="") as f:
+            # Por tandas: se puede cancelar y mostrar avance (con 0 filas sale solo el encabezado).
+            for ini in range(0, max(total, 1), _TANDA_CSV):
+                if cancel is not None:
+                    cancel.check()
+                salida.iloc[ini : ini + _TANDA_CSV].to_csv(
+                    f, sep=sep, index=False, header=ini == 0, lineterminator="\r\n"
+                )
+                report(ProgressEvent("Guardando el archivo…", min(ini + _TANDA_CSV, total), total))
+
+    _escribir_atomico(path, escribir)
     return WriteResult(path=path, rows=len(df), unconverted=fallidas)
 
 
 def _limpiar_texto(serie: pd.Series) -> pd.Series:
     """Saca los caracteres de control que Excel no admite."""
-    if serie.str.contains(ILLEGAL_CHARACTERS_RE.pattern, regex=True).any():
-        return serie.str.replace(ILLEGAL_CHARACTERS_RE.pattern, "", regex=True)
+    if serie.str.contains(_CONTROL_RE.pattern, regex=True).any():
+        return serie.str.replace(_CONTROL_RE.pattern, "", regex=True)
     return serie
 
 
-def _celdas_de_columna(serie: pd.Series, clase: str, ws) -> list[Any]:
-    """Valores de una columna listos para `ws.append` (None = celda vacía)."""
-    if clase == "texto":
-        serie = _limpiar_texto(serie)
-        valores = serie.tolist()
-        return [_celda_texto(v, ws) if v else None for v in valores]
-    if clase in _NUMERICOS:
-        out: list[Any] = []
-        for v in serie.tolist():
-            if isinstance(v, str):
-                out.append(_celda_texto(v, ws))
-            elif v is None or v != v:
-                out.append(None)
-            elif clase == "entero":
-                out.append(int(v))
-            else:
-                out.append(float(v))
+def _sin_control(texto: str) -> str:
+    return _CONTROL_RE.sub("", texto)
+
+
+class _Avisos:
+    """Cuenta los casos raros de una hoja para armar los avisos al final."""
+
+    def __init__(self) -> None:
+        self.recortadas = 0
+        self.fechas_viejas = 0
+
+    def textos(self, nombre_hoja: str) -> list[str]:
+        out = []
+        if self.recortadas:
+            out.append(
+                f'En la hoja "{nombre_hoja}" hay {self.recortadas} celdas con más de '
+                f"{_MAX_CELDA:,} caracteres: se recortaron porque Excel no admite más.".replace(
+                    ",", "."
+                )
+            )
+        if self.fechas_viejas:
+            out.append(
+                f'En la hoja "{nombre_hoja}" hay {self.fechas_viejas} fechas anteriores a 1900: '
+                "se guardaron como texto porque Excel no las puede mostrar como fecha."
+            )
         return out
-    formato = _FMT_FECHA if clase == "fecha" else _FMT_FECHA_HORA
-    out = []
-    for v in serie.tolist():
-        if isinstance(v, str):
-            out.append(_celda_texto(v, ws))
-        elif v is None or v is pd.NaT or v != v:
-            out.append(None)
-        else:
-            celda = WriteOnlyCell(ws, value=pd.Timestamp(v).to_pydatetime())
-            celda.number_format = formato
-            out.append(celda)
-    return out
 
 
-def _celda_texto(valor: str, ws):
-    """Texto que empieza con "=" se guarda como texto, nunca como fórmula."""
-    if valor.startswith("="):
-        celda = WriteOnlyCell(ws, value=valor)
-        celda.data_type = "s"
-        return celda
+def _recortar(valor: str, avisos: _Avisos) -> str:
+    if len(valor) > _MAX_CELDA:
+        avisos.recortadas += 1
+        return valor[:_MAX_CELDA]
     return valor
 
 
-def _llenar_hoja(ws, df: pd.DataFrame, column_types: dict[str, ColumnType] | None):
+def _valores_de_columna(serie: pd.Series, clase: str, avisos: _Avisos) -> list[Any]:
+    """Valores listos para escribir. Tipos: None = vacío, str = texto, int/float = número,
+    datetime = fecha. Las fechas anteriores a 1900 pasan a texto (y se cuentan)."""
+    if clase == "texto":
+        serie = _limpiar_texto(serie)
+        largos = serie.str.len()
+        if len(largos) and largos.max() > _MAX_CELDA:
+            avisos.recortadas += int((largos > _MAX_CELDA).sum())
+            serie = serie.str.slice(0, _MAX_CELDA)
+        return [v or None for v in serie.tolist()]
+    if clase in _NUMERICOS:
+        cast = int if clase == "entero" else float
+        return [
+            _recortar(_sin_control(v), avisos)
+            if isinstance(v, str)
+            else (None if v is None or v != v else cast(v))
+            for v in serie.tolist()
+        ]
+    salida: list[Any] = []
+    formato = "%d/%m/%Y" if clase == "fecha" else "%d/%m/%Y %H:%M:%S"
+    for v in serie.tolist():
+        if isinstance(v, str):
+            salida.append(_recortar(_sin_control(v), avisos))
+        elif v is None or v is pd.NaT or v != v:
+            salida.append(None)
+        else:
+            d = pd.Timestamp(v).to_pydatetime()
+            if d.year < _ANIO_MINIMO:
+                avisos.fechas_viejas += 1
+                salida.append(d.strftime(formato))
+            else:
+                salida.append(d)
+    return salida
+
+
+def _llenar_hoja(
+    ws,
+    formatos: dict[str, Any],
+    df: pd.DataFrame,
+    column_types: dict[str, ColumnType] | None,
+    freeze_header: bool,
+    autofilter: bool,
+    report: ThrottledProgress,
+    cancel: CancelToken | None,
+) -> tuple[dict[str, list[tuple[int, str]]], _Avisos]:
+    if cancel is not None:
+        cancel.check()
+    avisos = _Avisos()
     series, clases, fallidas = _columnas_convertidas(df, column_types)
     nombres = [str(c) for c in df.columns]
-    # En write_only la vista se escribe con la primera fila: congelar ANTES de agregar filas.
-    ws.freeze_panes = "A2"
-    ws.append([_celda_texto(_sin_control(n), ws) if n else None for n in nombres])
-    columnas = [_celdas_de_columna(s, c, ws) for s, c in zip(series, clases, strict=True)]
-    for fila in zip(*columnas, strict=True) if columnas else ():
-        ws.append(list(fila))
-    if nombres:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(nombres))}{len(df) + 1}"
-    return fallidas
+    total = len(df)
+    if freeze_header:
+        ws.freeze_panes(1, 0)
+    for j, nombre in enumerate(nombres):
+        if nombre:
+            ws.write_string(0, j, _recortar(_sin_control(nombre), avisos))
+    columnas = [_valores_de_columna(s, c, avisos) for s, c in zip(series, clases, strict=True)]
+    # Formato por columna; lo que quedó como str (texto o no convertible) va con write_string.
+    fmts = [
+        formatos["fecha"] if c == "fecha" else formatos["fecha_hora"] if c == "fecha_hora" else None
+        for c in clases
+    ]
+    write_number, write_string, write_datetime = ws.write_number, ws.write_string, ws.write_datetime
+    for i in range(total):
+        if i % _CADA_FILAS == 0:
+            if cancel is not None:
+                cancel.check()
+            report(ProgressEvent("Guardando el archivo…", i, total))
+        fila = i + 1
+        for j, col in enumerate(columnas):
+            v = col[i]
+            if v is None:
+                continue
+            if isinstance(v, str):
+                write_string(fila, j, v)
+            elif isinstance(v, datetime):
+                write_datetime(fila, j, v, fmts[j])
+            else:
+                write_number(fila, j, v)
+    report(ProgressEvent("Guardando el archivo…", total, total))
+    if nombres and autofilter:
+        ws.autofilter(0, 0, total, len(nombres) - 1)
+    return fallidas, avisos
 
 
-def _sin_control(texto: str) -> str:
-    return ILLEGAL_CHARACTERS_RE.sub("", texto)
+def _guardar_xlsx(
+    hojas: Iterable[tuple[str, pd.DataFrame, dict[str, ColumnType] | None]],
+    path: Path,
+    *,
+    freeze_header: bool = True,
+    autofilter: bool = True,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> list[tuple[dict[str, list[tuple[int, str]]], int, list[str]]]:
+    """Escribe las hojas una por una (`hojas` puede ser un generador: no se juntan en memoria).
+    Devuelve por hoja: celdas sin convertir, filas y avisos."""
+    usados: set[str] = set()
+    resultados: list[tuple[dict[str, list[tuple[int, str]]], int, list[str]]] = []
+    report = ThrottledProgress(progress)
 
+    def escribir(tmp: Path) -> None:
+        # Los temporales de constant_memory van a una carpeta propia que se borra siempre.
+        with tempfile.TemporaryDirectory(
+            prefix="exceltool_", ignore_cleanup_errors=True
+        ) as carpeta:
+            wb = xlsxwriter.Workbook(
+                str(tmp),
+                {
+                    "constant_memory": True,
+                    "tmpdir": carpeta,
+                    "strings_to_formulas": False,
+                    "strings_to_numbers": False,
+                    "strings_to_urls": False,
+                    "nan_inf_to_errors": False,
+                },
+            )
+            try:
+                formatos = {
+                    "fecha": wb.add_format({"num_format": _FMT_FECHA}),
+                    "fecha_hora": wb.add_format({"num_format": _FMT_FECHA_HORA}),
+                }
+                for nombre, df, tipos in hojas:
+                    final = nombre_de_hoja(nombre, usados)
+                    avisos = []
+                    if final != str(nombre):
+                        avisos.append(
+                            f'El nombre de hoja "{nombre}" se cambió a "{final}" '
+                            "porque Excel no admite esos caracteres o ese largo."
+                        )
+                    # constant_memory: cada hoja se escribe entera antes de crear la siguiente.
+                    ws = wb.add_worksheet(final)
+                    fallidas, extra = _llenar_hoja(
+                        ws, formatos, df, tipos, freeze_header, autofilter, report, cancel
+                    )
+                    avisos += extra.textos(final)
+                    resultados.append((fallidas, len(df), avisos))
+                if not resultados:
+                    raise ExcelToolError("No hay hojas para guardar.")
+                wb.close()
+            except BaseException:
+                for ws in wb.worksheets():
+                    with contextlib.suppress(Exception):
+                        ws._opt_close()
+                raise
 
-def _guardar_xlsx(hojas: list[tuple[str, pd.DataFrame, dict[str, ColumnType] | None]], path: Path):
-    wb = Workbook(write_only=True)
-    resultados = []
-    for nombre, df, tipos in hojas:
-        ws = wb.create_sheet(title=nombre)
-        resultados.append(_llenar_hoja(ws, df, tipos))
-
-    def escribir() -> None:
-        try:
-            wb.save(path)
-        except BaseException:
-            # Cierra los generadores pendientes de write_only (si no, avisa al recolectarlos).
-            for ws in wb.worksheets:
-                filas = getattr(ws, "_rows", None)
-                if filas is not None and hasattr(filas, "close"):
-                    filas.close()
-            raise
-
-    _envolver(path, escribir)
+    try:
+        _escribir_atomico(path, escribir)
+    except xlsxwriter.exceptions.FileCreateError as exc:
+        # xlsxwriter envuelve los errores de disco: se vuelve al error original.
+        causa = exc.__cause__ or exc.__context__
+        if isinstance(causa, PermissionError):
+            raise ArchivoBloqueado(
+                "No se pudo guardar el archivo. Si está abierto en Excel, "
+                "cerralo y probá de nuevo.",
+                str(causa),
+            ) from exc
+        raise ExcelToolError(
+            "No se pudo guardar el archivo. Revisá que haya espacio en el disco "
+            "y que el nombre sea válido.",
+            str(exc),
+        ) from exc
     return resultados
 
 
-def write_table_impl(df: pd.DataFrame, path: Path, options: WriteOptions) -> WriteResult:
+def write_table_impl(
+    df: pd.DataFrame,
+    path: Path,
+    options: WriteOptions,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> WriteResult:
     from excel_tool.core.io import WriteResult
 
     path = Path(path)
     if options.format == "xlsx":
-        nombre = nombre_de_hoja(options.sheet_name, set())
-        fallidas = _guardar_xlsx([(nombre, df, options.column_types)], path)[0]
-        return WriteResult(path=path, rows=len(df), unconverted=fallidas)
+        fallidas, filas, avisos = _guardar_xlsx(
+            [(options.sheet_name, df, options.column_types)],
+            path,
+            freeze_header=options.freeze_header,
+            autofilter=options.autofilter,
+            progress=progress,
+            cancel=cancel,
+        )[0]
+        return WriteResult(path=path, rows=filas, unconverted=fallidas, warnings=avisos)
     if options.format in _CSV_FORMATOS:
-        return _escribir_csv(df, path, options.format, options)
+        return _escribir_csv(df, path, options.format, options, progress, cancel)
     raise ExcelToolError("Formato de salida no reconocido.", str(options.format))
 
 
 def write_sheets_impl(
-    sheets: dict[str, pd.DataFrame],
+    sheets: Mapping[str, pd.DataFrame] | Iterable[tuple[str, pd.DataFrame]],
     path: Path,
     column_types: dict[str, dict[str, ColumnType]] | None = None,
+    *,
+    common_types: dict[str, ColumnType] | None = None,
+    freeze_header: bool = True,
+    autofilter: bool = True,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
 ) -> list[WriteResult]:
     from excel_tool.core.io import WriteResult
 
     path = Path(path)
-    usados: set[str] = set()
-    hojas = []
-    for nombre, df in sheets.items():
-        hojas.append((nombre_de_hoja(nombre, usados), df, (column_types or {}).get(nombre)))
-    if not hojas:
-        raise ExcelToolError("No hay hojas para guardar.")
-    fallidas = _guardar_xlsx(hojas, path)
+    pares = sheets.items() if isinstance(sheets, Mapping) else sheets
+
+    def hojas():
+        for nombre, df in pares:
+            yield nombre, df, (column_types or {}).get(nombre, common_types)
+
+    res = _guardar_xlsx(
+        hojas(),
+        path,
+        freeze_header=freeze_header,
+        autofilter=autofilter,
+        progress=progress,
+        cancel=cancel,
+    )
     return [
-        WriteResult(path=path, rows=len(df), unconverted=f)
-        for (_, df, _), f in zip(hojas, fallidas, strict=True)
+        WriteResult(path=path, rows=filas, unconverted=f, warnings=avisos)
+        for f, filas, avisos in res
     ]

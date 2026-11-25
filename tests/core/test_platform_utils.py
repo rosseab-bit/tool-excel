@@ -99,3 +99,14 @@ def test_open_folder_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(pu.os, "startfile", llamadas.append, raising=False)
     pu.open_folder(Path(tmp_path))
     assert llamadas == [tmp_path]
+
+
+def test_app_dir_sin_compilar(monkeypatch):
+    monkeypatch.delattr("sys.frozen", raising=False)
+    assert pu.app_dir() is None
+
+
+def test_app_dir_compilado(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(tmp_path / "ExcelTool.exe"))
+    assert pu.app_dir() == tmp_path.resolve()

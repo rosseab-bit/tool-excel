@@ -21,7 +21,7 @@ datas += [
     (str(paquete / "limites_default.json"), "excel_tool"),
     (str(paquete / "assets"), "excel_tool/assets"),
 ]
-hiddenimports += ["pandas", "openpyxl", "tkinter", "pyarrow"]
+hiddenimports += ["pandas", "xlsxwriter", "tkinter", "pyarrow"]
 
 excludes = [
     "matplotlib", "IPython", "scipy", "pytest", "PyQt5", "PyQt6", "PySide2", "PySide6",
@@ -29,7 +29,7 @@ excludes = [
     "sqlalchemy", "lxml", "bs4",
     # pyarrow: solo lo que se probo que no hace falta (el resto lo importa pyarrow/__init__)
     "pyarrow.flight", "pyarrow.orc", "pyarrow.cuda", "pyarrow.tests", "pyarrow.include",
-    "tables", "xlsxwriter", "xlwt", "setuptools",
+    "tables", "openpyxl", "xlwt", "setuptools",
 ]
 
 a = Analysis(

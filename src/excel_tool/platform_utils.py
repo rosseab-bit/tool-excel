@@ -31,6 +31,13 @@ def user_data_dir() -> Path:
     return carpeta
 
 
+def app_dir() -> Path | None:
+    """Carpeta del ejecutable si la app está compilada; None si corre desde el código fuente."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return None
+
+
 def log_dir() -> Path:
     """Carpeta de logs (se crea si no existe)."""
     carpeta = user_data_dir() / "logs"

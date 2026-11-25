@@ -194,6 +194,43 @@ def test_errores(tmp_path, monkeypatch):
     with pytest.raises(ArchivoBloqueado):
         write_table(df, tmp_path / "a.csv", WriteOptions(format="csv_excel"))
     monkeypatch.undo()
-    monkeypatch.setattr("openpyxl.workbook.workbook.Workbook.save", bloqueado)
+    # xlsxwriter envuelve el error de disco en FileCreateError: se sigue viendo como bloqueado
+    monkeypatch.setattr("xlsxwriter.workbook.ZipFile", bloqueado)
     with pytest.raises(ArchivoBloqueado):
         write_table(df, tmp_path / "a.xlsx", WriteOptions(format="xlsx"))
+
+
+def test_csv_bytes_mide_sin_escribir(tmp_path):
+    from excel_tool.core.io import csv_bytes
+
+    df = _df_texto()
+    crudo = csv_bytes(df)
+    destino = tmp_path / "a.csv"
+    write_table(df, destino, WriteOptions(format="csv_excel"))
+    escrito = destino.read_bytes().removeprefix(b"\xef\xbb\xbf")
+    encabezado = escrito.split(b"\r\n", 1)[0] + b"\r\n"
+    assert crudo == escrito[len(encabezado) :]  # sin encabezado, mismo contenido
+    assert csv_bytes(df, header=True) == escrito
+    assert list(tmp_path.iterdir()) == [destino]
+
+
+def test_write_sheets_acepta_generador_y_avisa_renombre(tmp_path):
+    df = _df_texto()
+
+    def hojas():
+        yield "Ventas/2024", df
+        yield "Ventas/2024", df
+
+    destino = tmp_path / "h.xlsx"
+    res = write_sheets(hojas(), destino)
+    assert load_workbook(destino).sheetnames == ["Ventas_2024", "Ventas_2024 (2)"]
+    assert all(r.warnings for r in res)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("fmt", ["csv_excel", "xlsx"])
+def test_write_table_progreso_por_filas(tmp_path, fmt):
+    df = pd.DataFrame({"A": pd.array([str(i) for i in range(60_000)], dtype="string[pyarrow]")})
+    eventos = []
+    write_table(df, tmp_path / "p.out", WriteOptions(format=fmt), progress=eventos.append)
+    assert eventos[-1].done == eventos[-1].total == 60_000

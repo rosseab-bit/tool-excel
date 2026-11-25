@@ -16,8 +16,8 @@ from typing import Any
 
 from excel_tool.core.io import ReadOptions, list_sheets, read_table
 from excel_tool.core.progress import CancelToken, ProgressCallback
-from excel_tool.ui import exportar
-from excel_tool.ui.datos import PanelDatos
+from excel_tool.ui import exportar, guardar
+from excel_tool.ui.datos import TIPOS_QUE_SIRVEN, PanelDatos
 from excel_tool.ui.distintos import PanelDistintos, mensaje_de
 from excel_tool.ui.formato import (
     MAX_AVISOS,
@@ -54,6 +54,39 @@ def perfilar(leido: Any, **kwargs: Any) -> Any:
     from excel_tool.core.profile import profile_table
 
     return profile_table(leido, **kwargs)
+
+
+DESTINOS_SEMAFORO = (("Excel", "excel", "xlsx"), ("Google Sheets", "google_sheets", "csv_google"))
+TITULO_SEMAFORO = "¿Entra en Excel o en Google Sheets?"
+TEXTO_DIVIDIR = "Dividir y guardar…"
+
+
+def _limites() -> Any:
+    """Módulo `core.limits` (import perezoso, reemplazable en tests). None si todavía no existe."""
+    try:
+        from excel_tool.core import limits
+    except ImportError:
+        log.warning("core.limits todavía no existe: no se muestra el semáforo.")
+        return None
+    return limits
+
+
+def calcular_semaforo(df: Any) -> list[tuple[str, Any]] | None:
+    """Lista de (destino, resultado de `check`) para Excel y Google Sheets, o None si no se pudo."""
+    if df is None:
+        return None
+    limits = _limites()
+    if limits is None:
+        return None
+    try:
+        est = limits.estimate(df)
+        return [
+            (nombre, limits.check(est, destino, formato))
+            for nombre, destino, formato in DESTINOS_SEMAFORO
+        ]
+    except Exception:
+        log.exception("No se pudo calcular el semáforo de tamaño")
+        return None
 
 
 def _clave_orden(clave: str, col: Any) -> Any:
@@ -101,6 +134,7 @@ class Explorador(tk.Toplevel):
         self.tabla_frecuentes: ttk.Treeview | None = None
         self._perfil_en_paneles: Any = None
         self.df: Any = None  # la tabla ya leída (no se copia)
+        self.semaforo: list[tuple[str, Any]] | None = None
 
         self.title(f"Información de {seleccion.path.name}")
         self.minsize(820, 560)
@@ -225,6 +259,7 @@ class Explorador(tk.Toplevel):
             leido = read_table(ruta, opciones)
             tabla["df"] = leido.df
             cancel.check()
+            tabla["semaforo"] = calcular_semaforo(leido.df)
             hojas = list_sheets(ruta) if leido.sheets else None
             return perfilar(
                 leido,
@@ -238,7 +273,9 @@ class Explorador(tk.Toplevel):
             self,
             trabajo,
             title="Analizando el archivo",
-            on_success=lambda perfil: self._termino(version, perfil, tabla.get("df")),
+            on_success=lambda perfil: self._termino(
+                version, perfil, tabla.get("df"), tabla.get("semaforo")
+            ),
             on_error=lambda exc: self._fallo(version, exc),
             on_cancel=lambda: self._cancelo(version),
             modal=False,
@@ -265,12 +302,13 @@ class Explorador(tk.Toplevel):
         except queue.Empty:
             pass
 
-    def _termino(self, version: int, perfil: Any, df: Any = None) -> None:
+    def _termino(self, version: int, perfil: Any, df: Any = None, semaforo: Any = None) -> None:
         if self.cerrada or version != self._version:
             return
         self.analizando = False
         self.perfil = perfil
         self.df = df
+        self.semaforo = semaforo
         self._hoja_actual = perfil.sheet
         self._header_row = perfil.header_row
         self.mostrar_perfil(perfil)
@@ -342,6 +380,7 @@ class Explorador(tk.Toplevel):
             for n, (etiqueta, valor) in enumerate(filas):
                 ttk.Label(caja, text=etiqueta).grid(row=n, column=0, sticky="nw", padx=(0, 16))
                 ttk.Label(caja, text=valor, wraplength=520).grid(row=n, column=1, sticky="w")
+        self._llenar_semaforo()
         avisos = ttk.LabelFrame(self.contenido_general, text="Avisos", padding=8)
         avisos.pack(fill="x")
         lista = list(perfil.warnings)
@@ -352,6 +391,61 @@ class Explorador(tk.Toplevel):
         if len(lista) > MAX_AVISOS:
             resto = formatear_numero(len(lista) - MAX_AVISOS)
             ttk.Label(avisos, text=f"…y {resto} avisos más.").pack(anchor="w")
+
+    def _llenar_semaforo(self) -> None:
+        if not self.semaforo:
+            return
+        caja = ttk.LabelFrame(self.contenido_general, text=TITULO_SEMAFORO, padding=8)
+        caja.pack(fill="x", pady=(0, 8))
+        caja.columnconfigure(1, weight=1)
+        self.lineas_semaforo: list[tuple[tk.Label, ttk.Label]] = []
+        no_entra = False
+        for n, (nombre, chk) in enumerate(self.semaforo):
+            etiqueta, fondo, frente = guardar.NIVELES[chk.level]
+            marca = tk.Label(
+                caja,
+                text=f"●  {nombre}: {etiqueta}",
+                bg=fondo,
+                fg=frente,
+                anchor="w",
+                padx=8,
+                width=44,
+            )
+            marca.grid(row=n, column=0, sticky="w", pady=2)
+            motivos = list(chk.reasons)
+            motivo = ttk.Label(
+                caja,
+                text=motivos[0] if motivos else guardar.TEXTO_OK,
+                wraplength=420,
+                justify="left",
+            )
+            motivo.grid(row=n, column=1, sticky="w", padx=(12, 0))
+            self.lineas_semaforo.append((marca, motivo))
+            no_entra = no_entra or chk.level == "obligatorio"
+        self.boton_dividir = None
+        if no_entra:
+            self.boton_dividir = ttk.Button(
+                caja, text=TEXTO_DIVIDIR, command=self.dividir_y_guardar
+            )
+            self.boton_dividir.grid(row=len(self.semaforo), column=0, sticky="w", pady=(6, 0))
+
+    def dividir_y_guardar(self) -> None:
+        """Abre el paso Guardar con toda la tabla (sin copiarla)."""
+        if self.df is None or self.perfil is None:
+            return
+        datos = self.panel_datos
+        tipos = {
+            c.name: c.detected_type
+            for c in self.perfil.columns_profile
+            if c.detected_type in TIPOS_QUE_SIRVEN
+        }
+        guardar.abrir_guardar(
+            self,
+            self.df,
+            nombre_sugerido=Path(self.perfil.file.path).stem,
+            claves_sugeridas=list(datos.claves),
+            column_types=tipos,
+        )
 
     def _vaciar_columnas(self) -> None:
         self.tabla.delete(*self.tabla.get_children())
