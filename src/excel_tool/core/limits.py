@@ -68,6 +68,10 @@ class SizeCheck:
     suggested_parts: int
     suggested_rows_per_part: int
     suggested_columns: list[ColumnSuggestion]
+    # Máximo de filas que puede tener una parte en ese destino (F5-A). Al dividir sin cortar un
+    # grupo hay que usar este tope, no `suggested_rows_per_part` (que no deja margen).
+    # None si no hay tope (CSV en "solo guardar").
+    max_rows_per_part: int | None = None
 
 
 # ---------------------------------------------------------------------------- carga
@@ -241,8 +245,10 @@ def check(
     partes = 1
     mb = _mb_del_formato(est, format)
     max_datos = lim.excel_max_rows - 1
+    tope_parte: int | None
 
     if destination == "google_sheets":
+        tope_parte = max(lim.gs_comfortable_cells // max(est.columns, 1) - 1, 1)
         if est.cells > lim.gs_max_cells:
             duros.append(
                 f"Google Sheets acepta hasta {_n(lim.gs_max_cells)} celdas por planilla; "
@@ -268,7 +274,8 @@ def check(
     else:
         # Excel, y "solo guardar" con xlsx: el archivo no puede pasar el límite de la hoja.
         if destination == "solo_guardar" and format != "xlsx":
-            return SizeCheck("ok", [], 1, max(est.rows, 1), list(suggestions or []))
+            return SizeCheck("ok", [], 1, max(est.rows, 1), list(suggestions or []), None)
+        tope_parte = lim.excel_comfortable_rows if destination == "excel" else max_datos
         if est.rows + 1 > lim.excel_max_rows:
             duros.append(
                 f"Excel acepta hasta {_n(max_datos)} filas de datos por hoja (más el encabezado); "
@@ -303,7 +310,9 @@ def check(
     if nivel == "ok":
         partes = 1
     filas_por_parte = max(math.ceil(est.rows / partes), 1)
-    return SizeCheck(nivel, duros + blandos, partes, filas_por_parte, list(suggestions or []))
+    return SizeCheck(
+        nivel, duros + blandos, partes, filas_por_parte, list(suggestions or []), tope_parte
+    )
 
 
 # ---------------------------------------------------------------------------- columnas para dividir
@@ -372,7 +381,7 @@ def suggest_split_columns(
         distintos = cuentas.distinct_total
         if distintos < 2 or distintos > max_parts:
             continue
-        mayor = int(cuentas.table[explore.COL_CANTIDAD].max())
+        mayor = int(cuentas.table[cuentas.count_column].max())
         resultado.append(ColumnSuggestion(str(nombre), distintos, mayor, mayor <= tope_parte))
     reporte.force(ProgressEvent("Listo", total, total))
     resultado.sort(key=lambda s: (not s.fits, s.parts, s.largest_part_rows))

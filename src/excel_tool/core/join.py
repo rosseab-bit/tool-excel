@@ -19,6 +19,11 @@ Decisiones de nivel 1 (detalle interno del core):
 - `prefix` se antepone a TODAS las columnas de ese secundario; si igual coincide con otra, se
   agrega " (<archivo sin extensión>)".
 - Las claves que se muestran como ejemplo son los valores originales, recortados.
+- `suggest_reductions` reusa los cruces de claves (se calculan una vez) y mide cada alternativa
+  como el diagnóstico (filas y columnas exactas, bytes por muestra). Si hay varios detalles, deja
+  en detalle el de la tabla con más filas (el primero si empatan). Las columnas "pesadas" son las
+  de texto con 20 caracteres o más de largo promedio en una muestra; se quitan hasta 3 y solo si
+  el tamaño baja más del 15 %.
 - Control de filas: aplica cuando el plan no puede multiplicar ni quitar filas (todos los
   secundarios en `left`, sin detalle, resúmenes solo por la clave) y no hay resumen final.
   Un resumen por cliente y artículo, o una unión `inner`, cambian las filas a propósito.
@@ -27,6 +32,7 @@ Decisiones de nivel 1 (detalle interno del core):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
@@ -50,6 +56,7 @@ from excel_tool.core.limits import SizeEstimate
 from excel_tool.core.memory import MemoryCheck
 from excel_tool.core.normalize import KeyOptions, normalize_keys
 from excel_tool.core.output import OutputSpec
+from excel_tool.core.profile import MIN_NUMERICO_SUMABLE
 from excel_tool.core.progress import CancelToken, ProgressCallback, ProgressEvent
 from excel_tool.core.types import ColumnType, detect_column_type
 
@@ -125,6 +132,15 @@ class JoinResult:
     unmatched: dict[str, pd.DataFrame]
     diagnosis: JoinDiagnosis
     warnings: list[str]
+
+
+@dataclass(frozen=True)
+class Reduction:
+    description: str  # castellano: "Cambiar ventas.csv a resumen por ID cliente"
+    plan: JoinPlan  # el plan alternativo (la UI lo puede aplicar con un clic)
+    rows: int
+    columns: int
+    size: SizeEstimate
 
 
 # ---------------------------------------------------------------------- utilidades
@@ -700,14 +716,34 @@ def _diagnosticar(
     )
 
 
-def _nombres_finales(a: _Analisis) -> list[str]:
-    plan = a.plan
-    unidas = [n for _, n in a.nombres.principal] + [
-        n for lista in a.nombres.secundarios for _, n in lista
-    ]
+def _columnas_finales(plan: JoinPlan, n: _Nombres) -> list[tuple[str | None, str, str]]:
+    """(archivo, columna de origen, nombre final) en el orden del resultado. Única fuente."""
     if plan.final_summary is not None:
-        unidas = result_columns(plan.final_summary)
-    return _ordenar(unidas, plan.output_column_order)
+        unidas: list[tuple[str | None, str, str]] = [
+            (None, c, c) for c in result_columns(plan.final_summary)
+        ]
+    else:
+        claves = {p for s in plan.secondaries for p, _ in s.key_pairs}
+        unidas = [(None if o in claves else plan.principal.name, o, f) for o, f in n.principal]
+        for s, lista in zip(plan.secondaries, n.secundarios, strict=True):
+            unidas.extend((s.name, o, f) for o, f in lista)
+    por_nombre = {t[2]: t for t in unidas}
+    return [por_nombre[f] for f in _ordenar([t[2] for t in unidas], plan.output_column_order)]
+
+
+def _nombres_finales(a: _Analisis) -> list[str]:
+    return [f for _, _, f in _columnas_finales(a.plan, a.nombres)]
+
+
+def final_column_names(
+    plan: JoinPlan, tables: dict[str, pd.DataFrame]
+) -> list[tuple[str | None, str, str]]:
+    """Columnas del resultado sin unir: (archivo, columna de origen, nombre final).
+
+    `archivo` es None para la clave (y para las columnas de un resumen final). Usa las
+    mismas reglas de nombres que `run_join`; solo mira los encabezados, no lee filas.
+    """
+    return _columnas_finales(plan, _armar_nombres(plan, tables))
 
 
 def _cerrar_diagnostico(
@@ -912,6 +948,16 @@ def _control_de_filas(plan: JoinPlan) -> bool:
     return True
 
 
+def _columnas_del_resumen(spec: AggregationSpec | None) -> set[str] | None:
+    """Nombres de las columnas que usa un resumen final; None si no hay (se arman todas)."""
+    if spec is None:
+        return None
+    usadas = {g.column for g in spec.group_by} | {
+        ag.column for ag in spec.aggregations if ag.column
+    }
+    return usadas or None
+
+
 def _construir(
     a: _Analisis, avance: _Avance | None, cancel: CancelToken | None, *, con_tipos: bool = True
 ) -> _Armado:
@@ -946,15 +992,20 @@ def _construir(
         )
     if avance:
         avance.paso("Armando el resultado")
-    df = _juntar(a, tablas, pos, None)
+    # Con resumen final alcanza con las columnas que usa (agrupar y calcular): no se arma el resto.
+    solo = _columnas_del_resumen(plan.final_summary)
+    df = _juntar(a, tablas, pos, solo)
     tipos_resumen = [t.tipos for t in tablas]
     del tablas, pos
 
+    def usadas(lista: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        return lista if solo is None else [(o, f) for o, f in lista if f in solo]
+
     tipos: dict[str, ColumnType] = {}
     if con_tipos:
-        tipos = _detectar_tipos(dfp, a.nombres.principal, plan.principal.name)
+        tipos = _detectar_tipos(dfp, usadas(a.nombres.principal), plan.principal.name)
         for k, c in enumerate(cruces):
-            lista = a.nombres.secundarios[k]
+            lista = usadas(a.nombres.secundarios[k])
             if plan.secondaries[k].mode == "summary":
                 for origen, final in lista:
                     tipos[final] = tipos_resumen[k].get(origen, "texto")
@@ -989,6 +1040,238 @@ def diagnose_join(
     diag = _cerrar_diagnostico(a, avance, cancel)
     avance.fin("Diagnóstico listo")
     return diag
+
+
+# ---------------------------------------------------------------------- achicar el resultado
+
+_MIN_BAJA = 0.15  # una alternativa de "quitar columnas" tiene que bajar más que esto
+_LARGO_PESADA = 20  # largo promedio (caracteres) desde el que una columna de texto "pesa"
+_MAX_QUITAR = 3
+_FILAS_TIPOS = 5_000
+
+
+def _muestra(serie: pd.Series, n: int) -> pd.Series:
+    if len(serie) <= n:
+        return serie
+    return serie.iloc[np.linspace(0, len(serie) - 1, n).astype(np.int64)]
+
+
+def _lista_y(nombres: list[str]) -> str:
+    if len(nombres) == 1:
+        return nombres[0]
+    return ", ".join(nombres[:-1]) + " y " + nombres[-1]
+
+
+def _por_cada(claves: list[str]) -> str:
+    if len(claves) > 1:
+        return "una fila por cada combinación"
+    resto = re.sub(r"^(id|nro\.?|n[úu]mero|c[óo]digo|cod\.?)\s+", "", claves[0], flags=re.I)
+    return f"una fila por {resto.strip() or claves[0]}"
+
+
+def _resumen_por_clave(spec: SecondarySpec, dfs: pd.DataFrame) -> AggregationSpec:
+    """Una fila por clave: contar filas y sumar las columnas numéricas (o mixtas sumables)."""
+    claves = [q for _, q in spec.key_pairs]
+    calculos = [Aggregation("", "count")]
+    for col in dict.fromkeys(spec.columns):
+        if col in claves or col not in dfs.columns:
+            continue
+        muestra = _muestra(_columna_de(dfs, col, spec.name), _FILAS_TIPOS)
+        det = detect_column_type(muestra)
+        no_vacias = sum(det.breakdown.values())
+        numericas = det.breakdown.get("entero", 0) + det.breakdown.get("decimal", 0)
+        # mismo criterio que `ColumnProfile.summable`
+        if det.detected in ("entero", "decimal") or (
+            det.detected == "mixto"
+            and no_vacias > 0
+            and numericas / no_vacias >= MIN_NUMERICO_SUMABLE
+        ):
+            calculos.append(Aggregation(col, "sum"))
+    return AggregationSpec([GroupBy(c) for c in claves], calculos)
+
+
+def _a_resumen(spec: SecondarySpec, dfs: pd.DataFrame) -> SecondarySpec:
+    return replace(spec, mode="summary", summary=_resumen_por_clave(spec, dfs))
+
+
+def _analisis_ligero(
+    plan: JoinPlan,
+    tables: dict[str, pd.DataFrame],
+    base_cruces: list[_Cruce],
+    cancel: CancelToken | None,
+) -> _Analisis:
+    """Como `_analizar`, pero reusa los cruces y no arma el diagnóstico por archivo."""
+    nombres = _armar_nombres(plan, tables)
+    dfp = tables[plan.principal.name]
+    filas = np.ones(len(dfp), dtype=np.float64)
+    cruces: list[_Cruce] = []
+    for k, (spec, c0) in enumerate(zip(plan.secondaries, base_cruces, strict=True)):
+        c = replace(c0, spec=spec)
+        t = _tabla(c, nombres, k, completo=False, cancel=cancel)
+        m = _coincidencias_por_fila(c.pcodigo, t.sizes)
+        filas = filas * _factor(m, spec.how).astype(np.float64)
+        cruces.append(c)
+    return _Analisis(plan, tables, nombres, cruces, [], int(filas.sum()), [])
+
+
+def _medir(
+    plan: JoinPlan,
+    tables: dict[str, pd.DataFrame],
+    base_cruces: list[_Cruce],
+    cancel: CancelToken | None,
+) -> tuple[int, int, SizeEstimate]:
+    a = _analisis_ligero(plan, tables, base_cruces, cancel)
+    rows = _filas_resumen_final(a, cancel) if plan.final_summary is not None else a.rows_join
+    columnas = len(_nombres_finales(a))
+    return rows, columnas, _estimar_tamano(a, rows, columnas)
+
+
+def _peso(size: SizeEstimate) -> float:
+    return size.approx_mb_csv if size.approx_mb_csv > 0 else float(size.cells)
+
+
+def _columnas_pesadas(
+    plan: JoinPlan, tables: dict[str, pd.DataFrame]
+) -> list[tuple[str | None, str]]:
+    """(índice de secundario o None si es el principal, columna), las de texto más largo primero."""
+    nombres = _armar_nombres(plan, tables)
+    en_resumen_final: set[str] = set()
+    if plan.final_summary is not None:
+        fs = plan.final_summary
+        en_resumen_final = {g.column for g in fs.group_by} | {a.column for a in fs.aggregations}
+    claves_p = {p for s in plan.secondaries for p, _ in s.key_pairs}
+    finales_p = dict(nombres.principal)
+    candidatas: list[tuple[float, int | None, str]] = []
+
+    def evaluar(df: pd.DataFrame, nombre: str, columnas: list[str], dueno: int | None, final):
+        for col in dict.fromkeys(columnas):
+            if final(col) in en_resumen_final:
+                continue
+            serie = _muestra(_columna_de(df, col, nombre), 2_000)
+            largo = serie.dropna().astype(str).str.len().mean()
+            if largo == largo and largo >= _LARGO_PESADA:  # (nan != nan)
+                candidatas.append((float(largo), dueno, col))
+
+    evaluar(
+        tables[plan.principal.name],
+        plan.principal.name,
+        [c for c in plan.principal.columns if c not in claves_p],
+        None,
+        lambda c: finales_p.get(c, c),
+    )
+    for k, s in enumerate(plan.secondaries):
+        if s.mode == "summary":
+            continue
+        claves_s = {q for _, q in s.key_pairs}
+        finales = dict(nombres.secundarios[k])
+        evaluar(
+            tables[s.name],
+            s.name,
+            [c for c in s.columns if c not in claves_s],
+            k,
+            lambda c, f=finales: f.get(c, c),
+        )
+    candidatas.sort(key=lambda x: -x[0])
+    return [(None if d is None else str(d), c) for _, d, c in candidatas]
+
+
+def _sin_columnas(plan: JoinPlan, quitar: list[tuple[str | None, str]]) -> JoinPlan:
+    del_principal = {c for d, c in quitar if d is None}
+    principal = replace(
+        plan.principal, columns=[c for c in plan.principal.columns if c not in del_principal]
+    )
+    secundarios = []
+    for k, s in enumerate(plan.secondaries):
+        fuera = {c for d, c in quitar if d == str(k)}
+        secundarios.append(replace(s, columns=[c for c in s.columns if c not in fuera]))
+    return replace(plan, principal=principal, secondaries=secundarios)
+
+
+def suggest_reductions(
+    plan: JoinPlan,
+    tables: dict[str, pd.DataFrame],
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> list[Reduction]:
+    """Alternativas para achicar el resultado, sin unir nada, de la que más achica a la que menos.
+
+    1. Cada secundario en detalle pasado a resumen por la clave (contar filas + sumar numéricas).
+    2. Con varios detalles: todos a resumen menos uno (el de la tabla con más filas).
+    3. Quitar hasta 3 columnas de texto largo, si el tamaño baja más del 15 %.
+    Cada una trae filas, columnas y tamaño medidos como en `diagnose_join`. Las que no achican
+    se descartan.
+    """
+    _validar(plan, tables)
+    detalles = [k for k, s in enumerate(plan.secondaries) if s.mode == "detail"]
+    total = len(detalles) + 4
+    avance = _Avance(progress, cancel, total)
+    avance.paso("Comparando las claves de los archivos")
+    dfp = tables[plan.principal.name]
+    cruces = [_cruzar(plan, s, dfp, tables[s.name], plan.key_options) for s in plan.secondaries]
+    avance.paso("Midiendo el resultado actual")
+    _, _, base = _medir(plan, tables, cruces, cancel)
+    peso_base = _peso(base)
+
+    # (descripción, plan) en el orden en que se prueban
+    candidatas: list[tuple[str, JoinPlan]] = []
+    if len(detalles) > 1:
+        deja = max(detalles, key=lambda k: (len(tables[plan.secondaries[k].name]), -k))
+        otros = [k for k in detalles if k != deja]
+        nuevos = list(plan.secondaries)
+        for k in otros:
+            nuevos[k] = _a_resumen(nuevos[k], tables[nuevos[k].name])
+        nombres = [f"«{plan.secondaries[k].name}»" for k in otros]
+        candidatas.append(
+            (
+                f"Dejar el detalle de «{plan.secondaries[deja].name}» y pasar a resumen "
+                f"{_lista_y(nombres)}",
+                replace(plan, secondaries=nuevos),
+            )
+        )
+    for k in detalles:
+        s = plan.secondaries[k]
+        nuevos = list(plan.secondaries)
+        nuevos[k] = _a_resumen(s, tables[s.name])
+        claves = [q for _, q in s.key_pairs]
+        candidatas.append(
+            (
+                f"Cambiar {s.name} a resumen por {_lista_y(claves)} ({_por_cada(claves)})",
+                replace(plan, secondaries=nuevos),
+            )
+        )
+
+    medidas: list[Reduction] = []
+    vistos: list[JoinPlan] = []
+    for descripcion, alt in candidatas:
+        if alt in vistos:  # con dos detalles, "todos menos uno" coincide con una de las simples
+            continue
+        vistos.append(alt)
+        avance.paso(descripcion)
+        rows, columnas, size = _medir(alt, tables, cruces, cancel)
+        medidas.append(Reduction(descripcion, alt, rows, columnas, size))
+
+    avance.paso("Buscando las columnas que más ocupan")
+    pesadas = _columnas_pesadas(plan, tables)[:_MAX_QUITAR]
+    for n in range(len(pesadas), 0, -1):
+        quitar = pesadas[:n]
+        alt = _sin_columnas(plan, quitar)
+        rows, columnas, size = _medir(alt, tables, cruces, cancel)
+        if _peso(size) < peso_base * (1 - _MIN_BAJA):
+            nombres = [c for _, c in quitar]
+            cuales = "la columna" if n == 1 else "las columnas"
+            cola = "la que más ocupa" if n == 1 else "las que más ocupan"
+            medidas.append(
+                Reduction(
+                    f"Quitar {cuales} {_lista_y(nombres)} ({cola})", alt, rows, columnas, size
+                )
+            )
+            break
+
+    util = [r for r in medidas if _peso(r.size) < peso_base]
+    util.sort(key=lambda r: (_peso(r.size), r.size.cells))
+    avance.fin("Listo")
+    return util
 
 
 def run_join(

@@ -635,7 +635,19 @@ def test_receta_guardada_y_cargada_da_el_mismo_resultado_con_division(esc, tmp_p
     assert [(p.path.name, p.rows) for p in g1.parts] == [(p.path.name, p.rows) for p in g2.parts]
     assert g1.rows_total == g2.rows_total == 30
     for a, b in zip(g1.files, g2.files, strict=True):
-        assert a.read_bytes() == b.read_bytes()
+        if a.suffix.lower() == ".xlsx":
+            # un .xlsx lleva la fecha y hora de creación: si las dos copias se guardan en segundos
+            # distintos los bytes difieren (intermitente). Se compara el contenido de las celdas.
+            filas = [
+                [
+                    tuple(f)
+                    for f in openpyxl.load_workbook(x).worksheets[0].iter_rows(values_only=True)
+                ]
+                for x in (a, b)
+            ]
+            assert filas[0] == filas[1]
+        else:
+            assert a.read_bytes() == b.read_bytes()
 
 
 def test_receta_de_linux_se_abre_en_otra_carpeta_y_con_archivos_nuevos(esc, tmp_path):

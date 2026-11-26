@@ -75,7 +75,7 @@ class Grilla(ttk.Frame):
             barra, text="Siguiente ›", width=10, command=self.siguiente
         )
         self._btn_ultima = ttk.Button(barra, text="Última »", width=9, command=self.ultima)
-        self._posicion = tk.StringVar(value="")
+        self._posicion = tk.StringVar(master=self, value="")
         for b in (self._btn_primera, self._btn_anterior):
             b.pack(side="left", padx=2)
         ttk.Label(barra, textvariable=self._posicion).pack(side="left", padx=10)
@@ -251,7 +251,7 @@ class Grilla(ttk.Frame):
         for n in self._nombres:
             if n == COLUMNA_FILA:
                 continue
-            var = tk.BooleanVar(value=n not in self._ocultas)
+            var = tk.BooleanVar(master=menu, value=n not in self._ocultas)
             menu.add_checkbutton(
                 label=n if len(n) <= 40 else n[:39] + "…",
                 variable=var,

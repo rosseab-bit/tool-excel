@@ -349,3 +349,24 @@ def test_error_del_core_al_exportar_se_muestra(raiz, monkeypatch, carteles, tmp_
     ex.guardar_informe()
     _esperar(raiz, lambda: carteles.error)
     assert carteles.error[0][1].startswith("Cerrá el archivo")
+
+
+def test_distintos_de_columna_cantidad_usa_otro_nombre(raiz, monkeypatch):
+    df = pd.DataFrame({"Cantidad": ["1", "1", "2"]}, dtype="string[pyarrow]")
+    perfil = _perfil(df)
+    perfil.columns_profile = [columna("Cantidad", 0, "entero")]
+    perfil.columns = 1
+    monkeypatch.setattr(
+        explorador, "read_table", lambda path, opciones: SimpleNamespace(sheets=[], df=df)
+    )
+    monkeypatch.setattr(
+        explorador,
+        "perfilar",
+        lambda leido, *, on_column=None, progress=None, cancel=None, sheets=None: perfil,
+    )
+    seleccion = selector.Seleccion(perfil.file.path, None, CsvOptions(";", "utf-8-sig"), 0)
+    ex = explorador.abrir_explorador(raiz, seleccion)
+    _esperar(raiz, lambda: ex.perfil is not None)
+    p = _calcular(raiz, ex, ["Cantidad"])
+    titulos = [p.tabla.heading(c, "text") for c in p.tabla["columns"]]
+    assert titulos == ["Cantidad", "Cantidad de filas", "Porcentaje"]

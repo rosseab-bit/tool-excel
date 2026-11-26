@@ -79,6 +79,7 @@ class SizeCheck:
     suggested_parts: int
     suggested_rows_per_part: int
     suggested_columns: list
+    max_rows_per_part: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,9 @@ class ColumnSuggestion:
 
 
 class CoreFalso:
-    def __init__(self, nivel="ok", partes=2):
+    def __init__(self, nivel="ok", partes=2, tope=None, filas_por_destino=None):
+        self.tope = tope
+        self.filas_por_destino = filas_por_destino or {}
         self.nivel = nivel
         self.n_partes = partes
         self.checks = []
@@ -108,7 +111,10 @@ class CoreFalso:
             "recomendado": ["Conviene dividirlo.", "Tiene 400.000 filas."],
             "obligatorio": [f"Demasiado grande para {destino}.", "Tiene 2.300.000 filas."],
         }[self.nivel]
-        return SizeCheck(self.nivel, razones, 8, 290_000, suggestions or [])
+        filas = self.filas_por_destino.get(destino, 290_000)
+        return SizeCheck(
+            self.nivel, razones, 8, filas, suggestions or [], max_rows_per_part=self.tope
+        )
 
     def suggest_split_columns(self, df, destino, formato, *, progress=None, cancel=None, **kw):
         return [ColumnSuggestion("Region", 5, 420_000, True), ColumnSuggestion("Mes", 12, 9, False)]
@@ -174,8 +180,8 @@ def df():
     return pd.DataFrame({"Cliente": list("abcd"), "Region": ["N", "S", "N", "S"]})
 
 
-def _abrir(raiz, monkeypatch, df, nivel="ok", **kw):
-    core = CoreFalso(nivel)
+def _abrir(raiz, monkeypatch, df, nivel="ok", core=None, **kw):
+    core = core or CoreFalso(nivel)
     monkeypatch.setattr(guardar, "_core", core.namespace)
     v = guardar.abrir_guardar(raiz, df, nombre_sugerido="resultado_ventas", **kw)
     _esperar(raiz, lambda: _listo(v))
@@ -469,3 +475,67 @@ def test_core_ausente_avisa_con_mensaje(raiz, monkeypatch, df):
     monkeypatch.setattr(guardar.messagebox, "showinfo", lambda t, m, **kw: avisos.append(m))
     assert guardar.abrir_guardar(raiz, df, nombre_sugerido="r") is None
     assert avisos == [guardar.TEXTO_NO_DISPONIBLE]
+
+
+def test_sin_cortar_un_grupo_usa_el_tope_de_filas_del_destino(raiz, monkeypatch, df):
+    core = CoreFalso("recomendado", tope=300_000)
+    v, _ = _abrir(raiz, monkeypatch, df, core=core, claves_sugeridas=["Cliente"])
+    assert v.v_modo.get() == "keep"
+    assert v.v_filas.get() == "300.000"  # no las 290.000 sugeridas: sin margen se parte de más
+    v.v_modo.set("rows")
+    v._al_elegir_modo()
+    assert v.v_filas.get() == "300.000"  # en "partes de" no se toca lo ya puesto
+    v.v_modo.set("keep")
+    v._al_elegir_modo()
+    assert v.v_filas.get() == "300.000"
+
+
+def test_sin_cortar_un_grupo_sin_el_campo_nuevo_usa_lo_sugerido(raiz, monkeypatch, df):
+    core = CoreFalso("recomendado")  # el doble no trae tope (None)
+    v, _ = _abrir(raiz, monkeypatch, df, core=core, claves_sugeridas=["Cliente"])
+    assert v.v_modo.get() == "keep"
+    assert v.v_filas.get() == "290.000"
+
+
+def test_elegir_sin_cortar_un_grupo_a_mano_pone_el_tope(raiz, monkeypatch, df):
+    core = CoreFalso("recomendado", tope=300_000)
+    v, _ = _abrir(raiz, monkeypatch, df, core=core)  # sin claves: arranca en "partes de"
+    assert v.v_modo.get() == "rows" and v.v_filas.get() == "290.000"
+    v.v_modo.set("keep")
+    v._al_elegir_modo()
+    assert v.v_filas.get() == "300.000"
+
+
+def test_cambiar_de_destino_vuelve_a_la_division_sugerida(raiz, monkeypatch, df):
+    core = CoreFalso("recomendado", filas_por_destino={"excel": 280_000, "google_sheets": 560_000})
+    v, _ = _abrir(raiz, monkeypatch, df, core=core)
+    assert v.v_filas.get() == "280.000"
+    v.v_filas.set("1.000")
+    v._al_editar_filas()
+    v.v_modo.set("value")
+    v._al_elegir_modo()
+    v.rb_destino["google_sheets"].invoke()
+    _esperar(raiz, lambda: _listo(v))
+    assert v.v_filas.get() == "560.000"
+    assert v.v_modo.get() == "rows"
+
+
+def test_la_division_de_la_receta_vale_solo_para_su_destino(raiz, monkeypatch, df):
+    core = CoreFalso("recomendado", filas_por_destino={"excel": 280_000, "google_sheets": 560_000})
+    receta = OutputSpec(
+        Path("x.xlsx"), "xlsx", "excel", split=SplitSpec(mode="rows", rows_per_part=1234)
+    )
+    v, _ = _abrir(raiz, monkeypatch, df, core=core, salida_inicial=receta)
+    assert v.v_filas.get() == "1.234"
+    v.rb_destino["google_sheets"].invoke()
+    _esperar(raiz, lambda: _listo(v))
+    assert v.v_filas.get() == "560.000"
+    v.rb_destino["excel"].invoke()
+    _esperar(raiz, lambda: _listo(v))
+    assert v.v_filas.get() == "1.234"
+
+
+def test_al_cerrar_la_ventana_suelta_la_tabla(raiz, monkeypatch, df):
+    v, _ = _abrir(raiz, monkeypatch, df)
+    v.cerrar()
+    assert len(v.df) == 0 and list(v.df.columns) == list(df.columns)

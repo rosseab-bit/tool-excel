@@ -57,7 +57,7 @@ class CuerpoDesplazable:
         self.ventana.bind_all("<Button-4>", self._rueda)
         self.ventana.bind_all("<Button-5>", self._rueda)
 
-    def desactivar_rueda(self) -> None:
+    def desactivar_rueda(self, _evento: object = None) -> None:
         for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             try:
                 self.ventana.unbind_all(ev)

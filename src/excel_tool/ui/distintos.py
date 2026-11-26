@@ -13,7 +13,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from excel_tool.core.explore import COL_CANTIDAD, COL_PORCENTAJE, DistinctOptions, value_counts
+from excel_tool.core.explore import DistinctOptions, value_counts
 from excel_tool.ui import exportar
 from excel_tool.ui.formato import formatear_numero, formatear_porcentaje
 from excel_tool.ui.worker import MENSAJE_INESPERADO, run_in_background
@@ -53,10 +53,10 @@ class PanelDistintos(ttk.Frame):
         self._nombres: dict[str, str] = {}
         self._version = 0
 
-        self.var_orden = tk.StringVar(value="cantidad")
-        self.var_vacios = tk.BooleanVar(value=True)
-        self.var_juntar = tk.BooleanVar(value=False)
-        self.var_buscar = tk.StringVar()
+        self.var_orden = tk.StringVar(master=self, value="cantidad")
+        self.var_vacios = tk.BooleanVar(master=self, value=True)
+        self.var_juntar = tk.BooleanVar(master=self, value=False)
+        self.var_buscar = tk.StringVar(master=self)
         self._armar()
 
     def _armar(self) -> None:
@@ -219,7 +219,7 @@ class PanelDistintos(ttk.Frame):
         self.tabla.delete(*self.tabla.get_children())
         ids = [f"c{i}" for i in range(len(columnas) + 2)]
         self.tabla.configure(columns=ids, displaycolumns="#all")
-        titulos = [*columnas, COL_CANTIDAD, COL_PORCENTAJE]
+        titulos = [*columnas, resultado.count_column, resultado.percent_column]
         for i, (cid, titulo) in enumerate(zip(ids, titulos, strict=True)):
             numerica = i >= len(columnas)
             self.tabla.heading(cid, text=titulo)

@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from excel_tool.core.io import ReadOptions, list_sheets, read_table
+from excel_tool.core.io import ReadOptions, ReadResult, list_sheets, read_table
 from excel_tool.core.progress import CancelToken, ProgressCallback
 from excel_tool.ui import exportar, guardar
 from excel_tool.ui.datos import TIPOS_QUE_SIRVEN, PanelDatos
@@ -54,6 +54,13 @@ def perfilar(leido: Any, **kwargs: Any) -> Any:
     from excel_tool.core.profile import profile_table
 
     return profile_table(leido, **kwargs)
+
+
+def perfil_de_tabla(df: Any, titulo: str, **kwargs: Any) -> Any:
+    """Perfil de una tabla que ya está en memoria y no viene de un archivo (por ejemplo, el
+    resultado de unir). El perfil queda con el nombre `titulo` y sin datos de archivo."""
+    leido = ReadResult(df, Path(titulo), "csv", None, [], None, 0, {}, [])
+    return perfilar(leido, display_name=titulo, **kwargs)
 
 
 DESTINOS_SEMAFORO = (("Excel", "excel", "xlsx"), ("Google Sheets", "google_sheets", "csv_google"))
@@ -112,11 +119,21 @@ class Explorador(tk.Toplevel):
     def __init__(
         self,
         parent: tk.Misc,
-        seleccion: Seleccion,
+        seleccion: Seleccion | None,
         on_cerrar: Callable[[], None] | None = None,
+        *,
+        tabla: Any = None,
+        titulo: str | None = None,
+        perfil: Any = None,
     ) -> None:
         super().__init__(parent)
+        if seleccion is None and tabla is None:
+            raise ValueError("Hace falta un archivo o una tabla.")
         self.seleccion = seleccion
+        self.tabla_dada = tabla  # tabla ya cargada: no se vuelve a leer el archivo
+        self.perfil_dado = perfil
+        self.nombre = titulo or (seleccion.path.name if seleccion is not None else "Tabla")
+        self.hay_archivo = seleccion is not None
         self.on_cerrar = on_cerrar
         self.on_ver_distintos: Callable[[str], None] | None = None
         self.perfil: Any = None
@@ -127,20 +144,20 @@ class Explorador(tk.Toplevel):
         self._cola: queue.Queue[tuple[int, Any]] = queue.Queue()
         self._columnas: dict[str, Any] = {}
         self._orden: tuple[str, bool] | None = None
-        self._hoja_actual: str | None = seleccion.sheet
-        self._hoja_pedida: str | None = seleccion.sheet
-        self._header_row: int | None = seleccion.header_row
+        self._hoja_actual: str | None = seleccion.sheet if seleccion else None
+        self._hoja_pedida: str | None = self._hoja_actual
+        self._header_row: int | None = seleccion.header_row if seleccion else None
         self._hojas: list[Any] = []
         self.tabla_frecuentes: ttk.Treeview | None = None
         self._perfil_en_paneles: Any = None
         self.df: Any = None  # la tabla ya leída (no se copia)
         self.semaforo: list[tuple[str, Any]] | None = None
 
-        self.title(f"Información de {seleccion.path.name}")
+        self.title(f"Información de {self.nombre}")
         self.minsize(820, 560)
         self.protocol("WM_DELETE_WINDOW", self.cerrar)
         self._armar()
-        self.after_idle(lambda: self.analizar(seleccion.sheet))
+        self.after_idle(lambda: self.analizar(self._hoja_actual))
 
     # ---- armado ----
     def _armar(self) -> None:
@@ -148,11 +165,9 @@ class Explorador(tk.Toplevel):
         marco.pack(fill="both", expand=True)
         arriba = ttk.Frame(marco)
         arriba.pack(fill="x")
-        self.etiqueta_archivo = ttk.Label(
-            arriba, text=self.seleccion.path.name, font="TkHeadingFont"
-        )
+        self.etiqueta_archivo = ttk.Label(arriba, text=self.nombre, font="TkHeadingFont")
         self.etiqueta_archivo.pack(side="left")
-        self.var_hoja = tk.StringVar()
+        self.var_hoja = tk.StringVar(master=self.etiqueta_archivo)
         self.combo_hoja = ttk.Combobox(
             arriba, textvariable=self.var_hoja, state="readonly", width=44
         )
@@ -246,14 +261,39 @@ class Explorador(tk.Toplevel):
         self._vaciar_columnas()
         self._cola = queue.Queue()
         cola = self._cola
+        tabla: dict[str, Any] = {}
+        if self.tabla_dada is not None:
+            trabajo = self._trabajo_con_tabla(tabla, cola, version)
+        else:
+            trabajo = self._trabajo_leyendo(tabla, cola, version, hoja)
+
+        self._token = run_in_background(
+            self,
+            trabajo,
+            title="Analizando el archivo",
+            on_success=lambda perfil: self._termino(
+                version, perfil, tabla.get("df"), tabla.get("semaforo")
+            ),
+            on_error=lambda exc: self._fallo(version, exc),
+            on_cancel=lambda: self._cancelo(version),
+            modal=False,
+        )
+        self.after(INTERVALO_COLUMNAS_MS, lambda: self._drenar(version))
+
+    def _trabajo_leyendo(
+        self,
+        tabla: dict[str, Any],
+        cola: queue.Queue[tuple[int, Any]],
+        version: int,
+        hoja: str | None,
+    ) -> Callable[[ProgressCallback, CancelToken], Any]:
+        assert self.seleccion is not None
         opciones = ReadOptions(
             sheet=hoja,
             header_row=self._header_row if hoja == self._hoja_actual else None,
             csv=self.seleccion.csv_options,
         )
         ruta = self.seleccion.path
-
-        tabla: dict[str, Any] = {}
 
         def trabajo(progress: ProgressCallback, cancel: CancelToken) -> Any:
             leido = read_table(ruta, opciones)
@@ -269,18 +309,29 @@ class Explorador(tk.Toplevel):
                 cancel=cancel,
             )
 
-        self._token = run_in_background(
-            self,
-            trabajo,
-            title="Analizando el archivo",
-            on_success=lambda perfil: self._termino(
-                version, perfil, tabla.get("df"), tabla.get("semaforo")
-            ),
-            on_error=lambda exc: self._fallo(version, exc),
-            on_cancel=lambda: self._cancelo(version),
-            modal=False,
-        )
-        self.after(INTERVALO_COLUMNAS_MS, lambda: self._drenar(version))
+        return trabajo
+
+    def _trabajo_con_tabla(
+        self, tabla: dict[str, Any], cola: queue.Queue[tuple[int, Any]], version: int
+    ) -> Callable[[ProgressCallback, CancelToken], Any]:
+        """La tabla ya está cargada: no se lee nada. Si no vino el perfil, se arma acá."""
+        df, perfil_dado, titulo = self.tabla_dada, self.perfil_dado, self.nombre
+
+        def trabajo(progress: ProgressCallback, cancel: CancelToken) -> Any:
+            tabla["df"] = df
+            cancel.check()
+            tabla["semaforo"] = calcular_semaforo(df)
+            if perfil_dado is not None:
+                return perfil_dado
+            return perfil_de_tabla(
+                df,
+                titulo,
+                on_column=lambda col: cola.put((version, col)),
+                progress=progress,
+                cancel=cancel,
+            )
+
+        return trabajo
 
     def cancelar_analisis(self) -> None:
         if self._token is not None:
@@ -373,7 +424,10 @@ class Explorador(tk.Toplevel):
     def _llenar_general(self, perfil: Any) -> None:
         for hijo in self.contenido_general.winfo_children():
             hijo.destroy()
-        for titulo, filas in datos_generales(perfil):
+        secciones = datos_generales(perfil)
+        if not self.hay_archivo:
+            secciones = secciones[1:]  # una tabla en memoria no tiene datos de archivo
+        for titulo, filas in secciones:
             caja = ttk.LabelFrame(self.contenido_general, text=titulo, padding=8)
             caja.pack(fill="x", pady=(0, 8))
             caja.columnconfigure(1, weight=1)
@@ -620,7 +674,18 @@ class Explorador(tk.Toplevel):
 
 
 def abrir_explorador(
-    parent: tk.Misc, seleccion: Seleccion, on_cerrar: Callable[[], None] | None = None
+    parent: tk.Misc,
+    seleccion: Seleccion | None = None,
+    on_cerrar: Callable[[], None] | None = None,
+    *,
+    tabla: Any = None,
+    titulo: str | None = None,
+    perfil: Any = None,
 ) -> Explorador:
-    """Abre la ventana del explorador y empieza a analizar el archivo."""
-    return Explorador(parent, seleccion, on_cerrar)
+    """Abre la ventana del explorador y empieza a analizar.
+
+    Con `tabla` (un DataFrame ya cargado) no se vuelve a leer ningún archivo: se usa esa tabla y
+    el `perfil` si viene (si no, se arma en segundo plano). Sin `seleccion` la tabla no viene de
+    un archivo (por ejemplo, el resultado de unir) y `titulo` es el nombre que se muestra.
+    """
+    return Explorador(parent, seleccion, on_cerrar, tabla=tabla, titulo=titulo, perfil=perfil)

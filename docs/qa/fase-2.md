@@ -135,7 +135,7 @@ Ninguno bloqueante ni de gravedad media o alta.
 - Con `tests/fixtures/generados/grandes/rendimiento_2M.csv`: tiene que mostrar el progreso, poder cancelarse y
   cerrarse en un instante; cerrar la ventana a mitad del análisis.
 
-## Para probar en Windows (PM): checklist de las Fases 0 a 4 (la Fase 3 es la sección E y la Fase 4 la G; el detalle está en `docs/qa/fase-3.md` y `docs/qa/fase-4.md`)
+## Para probar en Windows (PM): checklist de las Fases 0 a 5 (la Fase 3 es la sección E, la Fase 4 la G y la Fase 5 la H; el detalle está en `docs/qa/fase-3.md` y `docs/qa/fase-4.md`)
 Lo que hay que hacer en una PC nueva con Windows (ideal: 8 GB de RAM, como las de los usuarios). Anotar al lado
 de cada paso OK / FALLA / observación (con captura si falla). Referencias: `README.md`, `docs/fases/fase-0.md`,
 `fase-1.md` y `fase-2.md` (Notas).
@@ -323,6 +323,38 @@ explorador y, con scripts, el core. Se corre desde la carpeta del repo con `.ven
     "Cerrar" a la vista y sin tapar la barra de tareas. **En Linux hoy mide 790 px y NO entra (BUG F4-A de
     `docs/qa/fase-4.md`)**; anotar si en Windows pasa lo mismo y cuánto se corta.
 50. Repetir 44 con el `.exe` compilado (el "Resumir…" tiene que abrir sin consola y sin errores).
+
+**H. Asistente para unir archivos (Fase 5)**
+Ahora sí hay pantalla para unir y para recetas. Referencias: `docs/qa/fase-5.md` y PLAN §6 ("Unir archivos").
+51. **Escenario de 3 archivos con el `.exe`:** inicio -> "Unir archivos". Principal `escenario_3\clientes.xlsx`, clave "ID cliente",
+    "+ Agregar archivo" `ventas.csv` (se empareja sola, ✅ 27 de 30) y `cobranzas.xlsx` (elegir a mano "Nro Cliente";
+    ⚠️ "Solo 5 de 30" y la sugerencia de ceros a la izquierda; tildar "Sacar ceros a la izquierda" -> ✅ 27 de 30).
+    Paso 4: ventas en **resumen** (Sumar Importe "Total comprado", Contar filas "Compras") y cobranzas en resumen (Sumar Monto);
+    Siguiente hasta "Revisar y guardar": 30 filas. Unir y "Guardar el resultado" -> Excel: abrir en Excel real. Los 3 clientes
+    sin compras (5, 17 y 28) tienen **0** (número) y los demás el total del esperado (cliente 16: 21.700,65). Repetir con ventas en
+    **detalle** (88 filas) y con "Resumen final" por Región (5 filas).
+52. **"Abrir carpeta":** al terminar de guardar (ventana Guardar, resultado en partes de 12 filas en CSV) el botón "Abrir carpeta"
+    abre el Explorador de Windows en la carpeta con las partes (probar con una ruta con espacios y tildes).
+53. **Archivo abierto en Excel al guardar:** con `salida.xlsx` abierto en Excel, guardar el resultado con el mismo nombre: tiene que
+    salir un mensaje amigable ("el archivo está abierto...") y **no** un traceback ni un archivo a medias; al cerrar Excel y
+    reintentar, se guarda. Repetir con el libro de varias hojas ("Guardar en un Excel con varias hojas").
+54. **Emojis:** en el asistente se ven bien 🔑 (columna clave), 🧾 y 📊 (paso 4), 1️⃣ ("Traer solo la primera fila"), ✅ y ⚠️
+    (indicadores del paso 3), 🟢 🟡 🔴 (semáforo) y 🔍 ("Ver información"). Anotar si alguno sale como un cuadradito o sin color.
+55. **El asistente en 1366x768 con escala del 125 %:** (Configuración > Pantalla). Recorrer los 7 pasos: la ventana tiene que
+    entrar entera, con "Anterior / Siguiente / Cancelar" siempre a la vista (el cuerpo se desplaza). Abrir también el editor de
+    resumen (paso 4) y "Armar el agrupamiento" (paso 6): "Listo" y "Cancelar" visibles. Con 150 % anotar cuánto se corta.
+56. **Receta de Linux abierta en Windows:** en Linux, armar la unión del 51, "Guardar esta receta…" (en la misma carpeta que los
+    archivos) y guardar el resultado en CSV en partes de 12. Copiar la carpeta a Windows. Inicio -> "Abrir una receta…": abre
+    en "Archivos a sumar" con los 3 archivos cargados (sin cartel de "Faltan archivos"), mismas columnas y mismo orden;
+    Unir -> 30 filas; "Guardar el resultado" viene con CSV y partes de 12 ya elegidos. Después poner en la carpeta archivos
+    "del mes siguiente" con los mismos nombres (ventas con otros importes) y repetir: el resultado cambia. Con la receta sola
+    en otra carpeta tiene que aparecer "Faltan archivos" y poder elegirlos con "Elegir…".
+57. **Escenario grande desde la UI (PC de 8 GB):** `grandes\clientes_grande.csv` + `ventas_grande.csv` en detalle: el paso 4
+    muestra 🔴 con 2.519.998 filas; el paso 5 baja al desmarcar columnas; Guardar para Excel da 🔴 y obliga a dividir; guardar
+    las partes (CSV para Excel) y abrir una en Excel. Anotar el pico de memoria (Administrador de tareas) y los tiempos: en Linux
+    el recorrido completo (`xvfb-run`... `tests\integracion\medicion_fase5.py`) da entre **1.443 y 1.674 MB** (tope 1,5 GB: ver
+    BUG F5-B de `docs/qa/fase-5.md`); en Windows correr `.venv\Scripts\python -m tests.integracion.medicion_fase5`.
+58. Repetir 51 con el `.exe` compilado y confirmar que no abre ninguna consola.
 
 **F. Para informar**
 43. Pasar al líder: resultado de cada paso (OK / FALLA / observación), los números de tiempo y memoria de los

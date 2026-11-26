@@ -19,6 +19,7 @@ Dataclasses y firmas públicas que cruzan de `src/excel_tool/core/` a `src/excel
 | `ui/worker` (hilo + cola + progreso + cancelar) | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `core/limits`, `core/split`, `core/output` (`save_result`, `split_file`), paso Guardar (UI) | 3 | Cerrado (OK PM, ADR-032); implementado |
 | `core/normalize`, `core/aggregate`, `core/join`, recetas, editor de resumen (UI) | 4 | Cerrado (OK PM, ADR-034); implementado |
+| Asistente para unir (UI: estado y pasos), `suggest_reductions`, `save_workbook` | 5 | Cerrado (OK PM, ADR-038); implementado |
 | Errores del core hacia la UI (cómo se muestran) | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `SizeEstimate`, `SizeCheck`, `SplitSpec`, `OutputSpec`, `save_result` | 3 | Borrador en PLAN.md §2 |
 | `AggregationSpec`, `JoinPlan`, `SourceSpec`, `SecondarySpec`, `KeyOptions`, `diagnose_join`, `run_join` | 4 | Borrador en PLAN.md §2 |
@@ -703,3 +704,56 @@ class EditorResumen(ttk.Frame):
 - Agrupar por (casillas; "por mes" / "por año" para columnas de fecha), tabla de cálculos `[columna ▼] [operación ▼] [nombre]` con "+ Agregar cálculo", nombre automático editable (`aggregate.default_name`), Sumar/Promedio solo para columnas numéricas o mixtas (con aviso), vista previa con `summarize` en el worker sobre una muestra o la tabla completa si es chica.
 - (F4-10) `summarize` con `group_by` vacío y al menos un cálculo devuelve una sola fila (toda la tabla). Sin grupos ni cálculos → `ExcelToolError`.
 - (ADR-037) `run_join`: en secundarios en `summary`, las filas del principal sin pareja llevan "0" en las columnas de `sum`, `count` y `count_distinct` (tipo entero/decimal se mantiene) y "" en el resto. El diagnóstico no cambia.
+
+### Fase 5 (cerrado, OK del PM, ADR-038; implementado)
+
+#### Backend
+```python
+# core/join.py
+@dataclass(frozen=True)
+class Reduction:
+    description: str                 # castellano: "Cambiar ventas.csv a resumen por ID cliente"
+    plan: JoinPlan                   # el plan alternativo (la UI lo puede aplicar con un clic)
+    rows: int; columns: int; size: SizeEstimate
+def suggest_reductions(plan: JoinPlan, tables: dict[str, pd.DataFrame], *, progress=None, cancel=None) -> list[Reduction]: ...
+# sin unir: por cada secundario en detalle, la versión en resumen (contar filas + sumar las numéricas); quitar las columnas que más pesan
+
+# core/output.py
+@dataclass(frozen=True)
+class SheetSpec:
+    name: str; df: pd.DataFrame; column_types: dict[str, ColumnType] | None = None
+def save_workbook(sheets: list[SheetSpec], path: Path, *, destination: Destination,
+                  progress=None, cancel=None) -> SaveResult: ...
+# un .xlsx con varias hojas; controla cada hoja con limits (🔴 en alguna → ExcelToolError con cuál y por qué)
+def plan_workbook(sheets: list[SheetSpec], destination: Destination) -> SizeCheck: ...   # semáforo combinado, sin escribir (F5-02)
+```
+
+#### Asistente (frontend, `ui/unir/`)
+```python
+@dataclass
+class EstadoUnion:                         # estado mutable del asistente, solo en la UI
+    principal: Fuente | None               # Fuente = SourceSpec + df leído + TableProfile
+    claves: list[str]                      # columnas clave del principal
+    key_options: KeyOptions
+    secundarios: list[FuenteSecundaria]    # Fuente + key_pairs + how + mode (None hasta que el usuario elija) + summary + prefix
+    columnas: dict[str, list[str]]         # por fuente
+    orden: list[str]
+    resumen_final: AggregationSpec | None
+    def plan(self) -> JoinPlan: ...        # arma el JoinPlan del core
+    def tablas(self) -> dict[str, pd.DataFrame]: ...
+    @classmethod
+    def desde_receta(cls, carga: RecipeLoad) -> EstadoUnion: ...
+
+class Paso(ttk.Frame):                      # cada paso del asistente
+    titulo: str
+    def __init__(self, parent, estado: EstadoUnion, asistente: Asistente): ...
+    def al_entrar(self) -> None: ...        # refresca desde el estado
+    def validar(self) -> str | None: ...    # None = puede seguir; texto = por qué no
+    def al_salir(self) -> None: ...         # vuelca al estado
+```
+- Pasos (7): 1 Archivo principal · 2 Clave · 3 Archivos a sumar (con limpieza de clave) · 4 ¿Detalle o resumen? · 5 Columnas · 6 Resumen final (opcional) · 7 Revisar y guardar.
+- Leer archivos, diagnosticar, unir y guardar van siempre por `ui/worker.py`. La UI no calcula: tamaños, coincidencias, ejemplos y avisos salen de `diagnose_join` / `suggest_reductions`.
+- (F5-03) `join.final_column_names(plan, tables) -> list[tuple[str | None, str, str]]`: (archivo, columna de origen, nombre final) en el orden en que `run_join` las deja, sin unir. `archivo` None = clave.
+- (F5-04, líder nivel 2) `DistinctResult` gana `count_column: str` y `percent_column: str`. Normalmente son "Cantidad" y "Porcentaje"; si una columna elegida ya se llama así, pasan a "Cantidad de filas" / "Porcentaje de filas" (y " (2)" si igual chocan). Nadie accede por `COL_CANTIDAD` a la tabla de un resultado: se usan esos campos (o la posición).
+- (F5-04) `profile_table` acepta una tabla sin archivo (resultado de una unión): `FileInfo` opcional / nombre a mostrar, sin archivo temporal.
+- (F5-A, líder nivel 2) `SizeCheck` gana `max_rows_per_part: int | None`: el máximo de filas que puede tener una parte en ese destino (límite cómodo, o el duro si no hay cómodo). Al dividir "sin cortar un grupo", la UI usa ese tope como filas por parte (no `suggested_rows_per_part`, que no deja margen para no cortar grupos).

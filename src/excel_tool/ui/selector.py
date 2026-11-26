@@ -145,10 +145,10 @@ class SelectorArchivo(tk.Toplevel):
         self.opciones.columnconfigure(1, weight=1)
         self._etiquetas: dict[ttk.Frame, ttk.Label] = {}
 
-        self.var_hoja = tk.StringVar()
-        self.var_sep = tk.StringVar()
-        self.var_cod = tk.StringVar()
-        self.var_encabezado = tk.StringVar(value="1")
+        self.var_hoja = tk.StringVar(master=self.opciones)
+        self.var_sep = tk.StringVar(master=self.opciones)
+        self.var_cod = tk.StringVar(master=self.opciones)
+        self.var_encabezado = tk.StringVar(master=self.opciones, value="1")
 
         self.fila_hoja = self._fila(0, "Hoja")
         self.combo_hoja = ttk.Combobox(

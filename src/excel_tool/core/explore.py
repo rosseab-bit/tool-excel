@@ -45,6 +45,8 @@ class DistinctResult:
     rows_total: int
     truncated: bool
     variant_groups: list[list[str]]  # solo con normalize=False
+    count_column: str = COL_CANTIDAD  # nombre real de la columna de cantidades en `table`
+    percent_column: str = COL_PORCENTAJE  # ídem para los porcentajes
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,21 @@ class FilterCondition:
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def _nombres_numericos(columns: list[str]) -> tuple[str, str]:
+    """Nombres de las columnas de cantidad y porcentaje que no choquen con las elegidas."""
+    usados = {str(c) for c in columns}
+    pares = ((COL_CANTIDAD, "Cantidad de filas"), (COL_PORCENTAJE, "Porcentaje de filas"))
+    nombres: list[str] = []
+    for base, alternativa in pares:
+        nombre = base if base not in usados else alternativa
+        n = 2
+        while nombre in usados or nombre in nombres:
+            nombre = f"{alternativa} ({n})"
+            n += 1
+        nombres.append(nombre)
+    return nombres[0], nombres[1]
 
 
 def _columna(df: pd.DataFrame, nombre: str) -> pd.Series:
@@ -247,7 +264,8 @@ def value_counts(
         [*tabla_cols, pd.Series(cuentas, dtype="int64"), pd.Series(porc, dtype="float64")],
         axis=1,
     )
-    tabla.columns = [*columns, COL_CANTIDAD, COL_PORCENTAJE]
+    col_cant, col_porc = _nombres_numericos(columns)
+    tabla.columns = [*columns, col_cant, col_porc]
     reporte.force(ProgressEvent("Listo", total_pasos, total_pasos))
     return DistinctResult(
         columns=list(columns),
@@ -256,6 +274,8 @@ def value_counts(
         rows_total=filas,
         truncated=truncado,
         variant_groups=variantes,
+        count_column=col_cant,
+        percent_column=col_porc,
     )
 
 

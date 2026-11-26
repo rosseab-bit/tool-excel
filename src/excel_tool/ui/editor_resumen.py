@@ -96,9 +96,9 @@ class _FilaCalculo:
         self.editor = editor
         self.marco = ttk.Frame(editor.contenedor_calculos)
         self.marco.pack(fill="x", pady=1)
-        self.var_columna = tk.StringVar()
-        self.var_operacion = tk.StringVar(value=ETIQUETA_DE["count"])
-        self.var_nombre = tk.StringVar()
+        self.var_columna = tk.StringVar(master=self.marco)
+        self.var_operacion = tk.StringVar(master=self.marco, value=ETIQUETA_DE["count"])
+        self.var_nombre = tk.StringVar(master=self.marco)
         self.editado = False
         self._poniendo = False
         self.combo_operacion = ttk.Combobox(
@@ -251,7 +251,7 @@ class EditorResumen(ttk.Frame):
     def _armar(self) -> None:
         grupos = ttk.LabelFrame(self, text="Agrupar por", padding=6)
         grupos.pack(fill="x")
-        self.var_buscar = tk.StringVar()
+        self.var_buscar = tk.StringVar(master=self)
         if len(self.nombres) > MUCHAS_COLUMNAS:
             fila = ttk.Frame(grupos)
             fila.pack(fill="x", pady=(0, 4))
@@ -301,7 +301,7 @@ class EditorResumen(ttk.Frame):
         marco = ttk.Frame(self.lista_grupos)
         marco.pack(fill="x", anchor="w")
         fijo = nombre in self.fixed_group
-        var = tk.BooleanVar(value=fijo)
+        var = tk.BooleanVar(master=marco, value=fijo)
         texto = f"{nombre} {TEXTO_CLAVE}" if fijo else nombre
         check = ttk.Checkbutton(marco, text=texto, variable=var, command=self._cambio)
         check.pack(side="left")
@@ -311,7 +311,7 @@ class EditorResumen(ttk.Frame):
         self.checks[nombre] = check
         self._marcos[nombre] = marco
         if self.column_types.get(nombre) in TIPOS_FECHA:
-            periodo = tk.StringVar(value="por día")
+            periodo = tk.StringVar(master=marco, value="por día")
             combo = ttk.Combobox(
                 marco, textvariable=periodo, values=list(PERIODOS), state="readonly", width=9
             )

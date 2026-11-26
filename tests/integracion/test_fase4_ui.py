@@ -43,11 +43,14 @@ def _dec(texto: str) -> Decimal:
 def _textos(widget) -> list[str]:
     hallados = []
     for hijo in widget.winfo_children():
-        for opcion in ("text", "values"):
-            try:
-                hallados.append(" ".join(str(x) for x in hijo.cget(opcion)))
-            except tk.TclError:
-                pass
+        try:
+            hallados.append(str(hijo.cget("text")))
+        except tk.TclError:
+            pass
+        try:
+            hallados.append(" ".join(str(x) for x in hijo.cget("values")))
+        except tk.TclError:
+            pass
         hallados.extend(_textos(hijo))
     return hallados
 

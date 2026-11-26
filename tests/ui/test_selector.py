@@ -65,15 +65,15 @@ def _abrir(raiz, path, aceptadas):
     return sel
 
 
-def test_inicio_cuatro_botones(raiz):
+def test_inicio_cinco_botones(raiz):
     pantalla = app.PantallaInicio(raiz)
     raiz.update()
-    assert len(pantalla.botones) == 4
+    assert len(pantalla.botones) == 5
     estados = [b.instate(["disabled"]) for b in pantalla.botones]
-    assert estados == [False, True, True, True]
+    assert estados == [False, False, False, True, True]
     textos = _textos(pantalla)
     assert "Ver información de un archivo" in textos
-    assert sum(app.PROXIMAMENTE in t for t in textos) == 3
+    assert sum(app.PROXIMAMENTE in t for t in textos) == 2
 
 
 def test_selector_csv_y_preferencias(raiz):

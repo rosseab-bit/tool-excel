@@ -116,8 +116,14 @@ def abrir_guardar(
     on_terminado: Callable[[Any], None] | None = None,
     claves_sugeridas: list[str] | None = None,
     column_types: dict | None = None,
+    salida_inicial: Any | None = None,
 ) -> VentanaGuardar | None:
-    """Abre la ventana del paso Guardar. Devuelve la ventana (o None si el core no está)."""
+    """Abre la ventana del paso Guardar. Devuelve la ventana (o None si el core no está).
+
+    `salida_inicial` (un `OutputSpec`, por ejemplo el de una receta) deja preelegidos el destino,
+    el formato, la división y la carpeta. Después de guardar, `VentanaGuardar.salida_usada` tiene
+    el `OutputSpec` con el que se guardó (para ponerlo en una receta).
+    """
     try:
         core = _core()
     except ExcelToolError as exc:
@@ -131,6 +137,7 @@ def abrir_guardar(
         on_terminado=on_terminado,
         claves_sugeridas=claves_sugeridas,
         column_types=column_types,
+        salida_inicial=salida_inicial,
     )
 
 
@@ -145,8 +152,13 @@ class VentanaGuardar:
         on_terminado: Callable[[Any], None] | None,
         claves_sugeridas: list[str] | None,
         column_types: dict | None = None,
+        salida_inicial: Any | None = None,
     ) -> None:
         self.df = df
+        self.salida_inicial = salida_inicial
+        self.salida_usada: Any | None = None
+        self._spec_en_curso: Any | None = None
+        self._valor_pedido: str | None = None
         self.column_types = column_types
         self.core = core
         self.on_terminado = on_terminado
@@ -172,6 +184,8 @@ class VentanaGuardar:
 
         prefs = load_preferences()
         destino = prefs.last_destination
+        if salida_inicial is not None and salida_inicial.destination in dict(DESTINOS):
+            destino = salida_inicial.destination
         if destino not in dict(DESTINOS):
             destino = DESTINO_INICIAL
 
@@ -185,7 +199,10 @@ class VentanaGuardar:
         self._fuente_negrita.configure(weight="bold")
 
         self.v_destino = tk.StringVar(master=self.win, value=destino)
-        self.v_formato = tk.StringVar(master=self.win, value=FORMATO_INICIAL[destino])
+        formato = FORMATO_INICIAL[destino]
+        if salida_inicial is not None and salida_inicial.format in dict(FORMATOS[destino]):
+            formato = salida_inicial.format
+        self.v_formato = tk.StringVar(master=self.win, value=formato)
         self.v_modo = tk.StringVar(master=self.win, value="none")
         self.v_filas = tk.StringVar(master=self.win, value="")
         self.v_col_grupo = tk.StringVar(
@@ -197,6 +214,7 @@ class VentanaGuardar:
         self._armar()
         self.win.protocol("WM_DELETE_WINDOW", self.cerrar)
         self._ajustar_opciones()
+        self._preelegir_division()
         self._etapa_a(buscar=len(df) < AUTO_FILAS)
 
     # ------------------------------------------------------------------ armado
@@ -335,6 +353,27 @@ class VentanaGuardar:
             command=self._al_elegir_modo,
         )
 
+    def _preelegir_division(self) -> None:
+        """Deja elegida la división de `salida_inicial` (si la hay y se puede)."""
+        dividir = getattr(self.salida_inicial, "split", None)
+        if dividir is None:
+            return
+        modo = {v: k for k, v in MODOS_SPLIT.items()}.get(dividir.mode)
+        if modo is None or (modo == "sheets" and not self.hojas_disponibles()):
+            return
+        self.v_modo.set(modo)
+        self._modo_manual = True
+        if dividir.rows_per_part:
+            self.v_filas.set(formatear_numero(int(dividir.rows_per_part)))
+            self._n_editado = True
+        grupo = getattr(dividir, "group_column", None)
+        if grupo in self.columnas:
+            self.v_col_grupo.set(grupo)
+        valores = list(getattr(dividir, "value_columns", None) or [])
+        if valores:
+            self._valor_pedido = valores[0]
+            self.v_subdividir.set(bool(dividir.rows_per_part))
+
     # --------------------------------------------------------------- opciones
     def hojas_disponibles(self) -> bool:
         """Solo Excel, y solo con formato xlsx (una hoja por parte)."""
@@ -373,7 +412,15 @@ class VentanaGuardar:
         prefs = load_preferences()
         save_preferences(replace(prefs, last_destination=self.v_destino.get()))
         self.v_formato.set(FORMATO_INICIAL[self.v_destino.get()])
+        # La división vuelve a la sugerida para el nuevo destino. Lo preelegido de una receta
+        # vale solo para el destino de esa receta.
+        self._modo_manual = False
+        self._n_editado = False
+        self.v_filas.set("")
+        self.v_modo.set("none")
         self._ajustar_opciones()
+        if getattr(self.salida_inicial, "destination", None) == self.v_destino.get():
+            self._preelegir_division()
         self._etapa_a(buscar=len(self.df) < AUTO_FILAS)
 
     def _al_cambiar_formato(self) -> None:
@@ -382,6 +429,8 @@ class VentanaGuardar:
 
     def _al_elegir_modo(self) -> None:
         self._modo_manual = True
+        if self.v_modo.get() == "keep":
+            self._sugerir_filas()
         self._etapa_b()
 
     def _al_editar_filas(self, _evento: object = None) -> None:
@@ -484,22 +533,36 @@ class VentanaGuardar:
         )
         self.rb_uno.state(["disabled"] if obligatorio else ["!disabled"])
 
-        if not self._n_editado and chk.suggested_rows_per_part:
-            self.v_filas.set(formatear_numero(int(chk.suggested_rows_per_part)))
-
         self._cargar_sugerencias()
         preferido = "keep" if self.v_col_grupo.get() else "rows"
         if obligatorio and self.v_modo.get() == "none":
             self.v_modo.set(preferido)
         elif not self._modo_manual:
             self.v_modo.set("none" if chk.level == "ok" else preferido)
+        self._sugerir_filas()
+
+    def _sugerir_filas(self) -> None:
+        """Filas por parte sugeridas (si el usuario no las tocó). "Sin cortar un mismo grupo"
+        usa el tope de filas del destino (`max_rows_per_part`): con la cantidad sugerida no
+        queda margen y siempre sale una parte de más."""
+        chk = self._check
+        if chk is None or self._n_editado:
+            return
+        filas = chk.suggested_rows_per_part
+        if self.v_modo.get() == "keep":
+            filas = getattr(chk, "max_rows_per_part", None) or filas
+        if filas:
+            self.v_filas.set(formatear_numero(int(filas)))
 
     def _cargar_sugerencias(self) -> None:
         self._sug_por_texto = {_texto_sugerencia(s): s.column for s in self._sug}
         textos = list(self._sug_por_texto)
         self.cmb_valor.configure(values=textos)
         if self.v_col_valor.get() not in self._sug_por_texto:
-            self.v_col_valor.set(textos[0] if textos else "")
+            pedido = next(
+                (t for t, c in self._sug_por_texto.items() if c == self._valor_pedido), None
+            )
+            self.v_col_valor.set(pedido or (textos[0] if textos else ""))
 
     # -------------------------------------------------------- etapa B: partes
     def _filas_por_parte(self) -> int | None:
@@ -669,6 +732,9 @@ class VentanaGuardar:
             ],
         }
         carpeta = load_preferences().last_folder
+        previa = getattr(self.salida_inicial, "path", None)
+        if previa is not None and Path(previa).parent.is_dir():
+            carpeta = Path(previa).parent
         if carpeta is not None and carpeta.is_dir():
             opciones["initialdir"] = str(carpeta)
         elegido = filedialog.asksaveasfilename(**opciones)
@@ -685,6 +751,7 @@ class VentanaGuardar:
             split=div.spec,
             column_types=self.column_types,
         )
+        self._spec_en_curso = spec
         prefs = load_preferences()
         save_preferences(replace(prefs, last_folder=ruta.parent, last_destination=destino))
 
@@ -708,6 +775,7 @@ class VentanaGuardar:
     def _al_guardar(self, resultado: object) -> None:
         self._bloquear(False)
         self._resultado = resultado
+        self.salida_usada = self._spec_en_curso
         archivos = len({p.path for p in resultado.parts}) or len(resultado.files)  # type: ignore[attr-defined]
         filas = formatear_numero(resultado.rows_total)  # type: ignore[attr-defined]
         if archivos == 1:
@@ -761,6 +829,10 @@ class VentanaGuardar:
     def cerrar(self) -> None:
         self._gen_a += 1
         self._gen_b += 1
+        # Soltar la tabla: queda vacía (con sus columnas) para que nada la use por error.
+        self.df = self.df.iloc[0:0]
+        self._partes = None
+        self._resultado = None
         try:
             self.cuerpo_desplazable.desactivar_rueda()
             self.win.destroy()

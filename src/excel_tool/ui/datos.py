@@ -59,9 +59,9 @@ class FilaCondicion:
     def __init__(self, panel: PanelDatos, nombres: list[str]) -> None:
         self.marco = ttk.Frame(panel.contenedor_condiciones)
         self.marco.pack(fill="x", pady=1)
-        self.var_columna = tk.StringVar()
-        self.var_operacion = tk.StringVar(value="es igual a")
-        self.var_valor = tk.StringVar()
+        self.var_columna = tk.StringVar(master=self.marco)
+        self.var_operacion = tk.StringVar(master=self.marco, value="es igual a")
+        self.var_valor = tk.StringVar(master=self.marco)
         self.combo_columna = ttk.Combobox(
             self.marco, textvariable=self.var_columna, values=nombres, state="readonly", width=24
         )

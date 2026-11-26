@@ -155,3 +155,44 @@ def entorno_ui(tmp_path, monkeypatch, raiz_sesion):
             f"el test dejó hilos del worker vivos pasados {TOPE_HILOS_S} s: {colgados}",
             pytrace=False,
         )
+
+
+# ---- escenario de 3 archivos y conductor del asistente (Fase 5)
+
+
+def _json_esperado(carpeta: Path, nombre: str) -> dict:
+    import json
+
+    return json.loads((carpeta / "escenario_3" / f"{nombre}.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def esc(fixtures_generados, fixtures_esperados) -> dict:
+    import csv
+
+    base = fixtures_generados / "escenario_3"
+    ventas_csv = []
+    with (base / "ventas.csv").open(encoding="cp1252", newline="") as f:
+        lector = csv.reader(f, delimiter=";")
+        next(lector)
+        for r in lector:
+            ventas_csv.append(
+                {"id": r[0], "fecha": r[1], "articulo": r[2], "cantidad": r[3], "importe": r[4]}
+            )
+    return {
+        "clientes": base / "clientes.xlsx",
+        "ventas": base / "ventas.csv",
+        "cobranzas": base / "cobranzas.xlsx",
+        "ventas_csv": ventas_csv,
+        "ventas_esp": _json_esperado(fixtures_esperados, "resumen_ventas"),
+        "cobranzas_esp": _json_esperado(fixtures_esperados, "resumen_cobranzas"),
+        "diag_esp": _json_esperado(fixtures_esperados, "diagnostico"),
+        "region_esp": _json_esperado(fixtures_esperados, "resumen_final_por_region"),
+    }
+
+
+@pytest.fixture
+def c(entorno_ui, monkeypatch):
+    from .asistente_util import Conductor
+
+    return Conductor(entorno_ui, monkeypatch)

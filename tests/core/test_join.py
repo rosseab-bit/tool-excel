@@ -19,7 +19,9 @@ from excel_tool.core.join import (
     SecondarySpec,
     SourceSpec,
     diagnose_join,
+    final_column_names,
     run_join,
+    suggest_reductions,
 )
 from excel_tool.core.normalize import KeyOptions
 from excel_tool.core.progress import CancelToken
@@ -679,3 +681,313 @@ def test_resumen_final_con_ceros_suma_igual(escenario, esperado):
     )
     res = run_join(plan, escenario)
     assert sum(int(x) for x in res.df["Clientes"]) == 30  # cuenta filas, no cambia
+
+
+# --------------------------------------------------------------- F5-01: achicar el resultado
+
+
+def _plan_dos_detalles(t):
+    return JoinPlan(
+        _principal(t),
+        CEROS,
+        [_ventas_detalle(t), _cobranzas(t)],
+    )
+
+
+def test_reducciones_ventas_en_detalle_da_una_fila_por_cliente(escenario):
+    ventas = _sec(
+        "ventas",
+        escenario["ventas"],
+        [("ID cliente", "ID cliente")],
+        ["Fecha", "Cantidad", "Importe"],
+    )
+    plan = JoinPlan(_principal(escenario), KeyOptions(), [ventas])
+    base = diagnose_join(plan, escenario)
+    sugeridas = suggest_reductions(plan, escenario)
+    assert len(sugeridas) == 1
+    r = sugeridas[0]
+    assert r.description == "Cambiar ventas a resumen por ID cliente (una fila por cliente)"
+    assert r.rows == 30 < base.rows_result
+    assert r.size.rows == 30 and r.columns == r.size.columns
+    sec = r.plan.secondaries[0]
+    assert sec.mode == "summary" and sec.summary is not None
+    nombres = [a.func for a in sec.summary.aggregations]
+    assert nombres[0] == "count"
+    assert [a.column for a in sec.summary.aggregations if a.func == "sum"] == [
+        "Cantidad",
+        "Importe",
+    ]
+    # el plan alternativo, ejecutado, da exactamente esas filas y columnas
+    res = run_join(r.plan, escenario)
+    assert len(res.df) == r.rows == res.diagnosis.rows_result
+    assert len(res.df.columns) == r.columns
+    # el plan original no se tocó
+    assert plan.secondaries[0].mode == "detail"
+
+
+def test_reducciones_dos_detalles_todos_menos_uno(escenario):
+    plan = _plan_dos_detalles(escenario)
+    base = diagnose_join(plan, escenario)
+    assert base.many_details
+    sugeridas = suggest_reductions(plan, escenario)
+    todas = [r for r in sugeridas if r.description.startswith("Dejar el detalle de")]
+    assert len(todas) == 1
+    r = todas[0]
+    modos = {s.name: s.mode for s in r.plan.secondaries}
+    assert sorted(modos.values()) == ["detail", "summary"]
+    # se deja el detalle de la tabla con más filas (ventas: 87 > cobranzas: 67)
+    assert modos["ventas"] == "detail"
+    assert "cobranzas" in r.description
+    assert not run_join(r.plan, escenario).diagnosis.many_details
+    assert len(run_join(r.plan, escenario).df) == r.rows < base.rows_result
+    # ordenadas de la que más achica a la que menos, todas más chicas que la actual
+    pesos = [x.size.approx_mb_csv for x in sugeridas]
+    assert pesos == sorted(pesos)
+    assert all(x.rows <= base.rows_result for x in sugeridas)
+    # no se repite el mismo plan
+    assert len({repr(x.plan) for x in sugeridas}) == len(sugeridas)
+
+
+def test_reducciones_sin_detalles_no_sugiere_resumenes(escenario):
+    plan = JoinPlan(_principal(escenario), KeyOptions(), [_ventas_resumen(escenario)])
+    assert suggest_reductions(plan, escenario) == []
+    assert suggest_reductions(JoinPlan(_principal(escenario), KeyOptions(), []), escenario) == []
+
+
+@pytest.fixture(params=["csv", "xlsx"])
+def con_texto_largo(request, tmp_path):
+    n = 300
+    clientes = _tabla(
+        **{
+            "ID": [str(i) for i in range(n)],
+            "Nombre": [f"Cliente {i}" for i in range(n)],
+            "Observaciones": [f"Observación larga del cliente número {i} " * 3 for i in range(n)],
+            "Descripción": [f"Descripción comercial extensa del rubro {i} " * 2 for i in range(n)],
+        }
+    )
+    if request.param == "xlsx":
+        write_table(clientes, tmp_path / "c.xlsx", WriteOptions(format="xlsx"))
+        clientes = read_table(tmp_path / "c.xlsx").df
+    else:
+        write_table(clientes, tmp_path / "c.csv", WriteOptions(format="csv_excel"))
+        clientes = read_table(tmp_path / "c.csv").df
+    ventas = _tabla(**{"ID": [str(i % n) for i in range(n)], "Importe": ["1"] * n})
+    return {"c": clientes, "v": ventas}
+
+
+def test_reducciones_quitar_columnas_pesadas(con_texto_largo):
+    t = con_texto_largo
+    plan = JoinPlan(
+        _src("c", t["c"]),
+        KeyOptions(),
+        [_sec("v", t["v"], [("ID", "ID")], ["Importe"], mode="first")],
+    )
+    sugeridas = suggest_reductions(plan, t)
+    assert len(sugeridas) == 1
+    r = sugeridas[0]
+    assert (
+        r.description == ("Quitar las columnas Observaciones y Descripción (las que más ocupan)")
+        or r.description == "Quitar las columnas Descripción y Observaciones (las que más ocupan)"
+    )
+    assert r.plan.principal.columns == ["ID", "Nombre"]
+    assert r.rows == 300 and r.columns == 3
+    assert r.size.approx_mb_csv < 0.85 * diagnose_join(plan, t).size.approx_mb_csv
+    res = run_join(r.plan, t)
+    assert list(res.df.columns) == ["ID", "Nombre", "Importe"] and len(res.df) == 300
+    assert r.columns == len(res.df.columns)
+
+
+def test_reducciones_no_quita_claves_ni_columnas_del_resumen_final(con_texto_largo):
+    t = con_texto_largo
+    final = AggregationSpec([GroupBy("Observaciones")], [Aggregation("", "count")])
+    plan = JoinPlan(_src("c", t["c"]), KeyOptions(), [], final_summary=final)
+    assert suggest_reductions(plan, t) == []
+    largas = _tabla(ID=["a" * 60 + str(i) for i in range(50)], Otro=["x"] * 50)
+    plan = JoinPlan(
+        _src("l", largas),
+        KeyOptions(),
+        [_sec("v", largas, [("ID", "ID")], ["Otro"], mode="first")],
+    )
+    assert suggest_reductions(plan, {"l": largas, "v": largas}) == []
+
+
+def test_reducciones_progreso_y_cancelacion(escenario):
+    plan = _plan_dos_detalles(escenario)
+    eventos = []
+    suggest_reductions(plan, escenario, progress=eventos.append)
+    assert eventos and eventos[-1].done == eventos[-1].total
+    cancel = CancelToken()
+    cancel.cancel()
+    with pytest.raises(Cancelado):
+        suggest_reductions(plan, escenario, cancel=cancel)
+
+
+@pytest.mark.skipif(
+    not (_GRANDES / "ventas_grande.csv").is_file(), reason="falta el escenario grande"
+)
+def test_reducciones_escenario_grande_es_rapido():
+    import time
+
+    clientes = read_table(_GRANDES / "clientes_grande.csv").df
+    ventas = read_table(_GRANDES / "ventas_grande.csv").df
+    sec = _sec("ventas", ventas, [("ID cliente", "ID cliente")], ["Fecha", "Cantidad", "Importe"])
+    plan = JoinPlan(_src("clientes", clientes), KeyOptions(), [sec])
+    t0 = time.perf_counter()
+    sugeridas = suggest_reductions(plan, {"clientes": clientes, "ventas": ventas})
+    assert time.perf_counter() - t0 < 5
+    assert len(sugeridas) >= 1
+    assert sugeridas[0].rows == 200_000
+    assert sugeridas[0].plan.secondaries[0].mode == "summary"
+
+
+# --------------------------------------------------------------- F5-03: nombres finales
+
+
+def _repetidos(t):
+    t = dict(t)
+    clientes = t["clientes.xlsx"].copy()
+    clientes["Total comprado"] = "x"
+    clientes["Fecha"] = "y"
+    t["clientes.xlsx"] = clientes
+    return t
+
+
+def _igual_que_run_join(plan, tablas):
+    nombres = final_column_names(plan, tablas)
+    assert [f for _, _, f in nombres] == list(run_join(plan, tablas).df.columns)
+    return nombres
+
+
+def test_nombres_finales_detalle_y_clave_sin_archivo(escenario):
+    plan = JoinPlan(_principal(escenario), CEROS, [_ventas_detalle(escenario)])
+    nombres = _igual_que_run_join(plan, escenario)
+    assert "ID cliente" in {o for a, o, _ in nombres if a is None}
+    assert ("ventas", "Importe", "Importe") in nombres
+
+
+def test_nombres_finales_resumen_y_primera_fila(escenario):
+    plan = JoinPlan(
+        _principal(escenario), CEROS, [_ventas_resumen(escenario), _cobranzas(escenario, "first")]
+    )
+    nombres = _igual_que_run_join(plan, escenario)
+    assert ("ventas", "Total comprado", "Total comprado") in nombres
+
+
+def test_nombres_finales_prefix_y_repetidos(escenario):
+    t = _repetidos(escenario)
+    principal = _src("clientes.xlsx", t["clientes.xlsx"])
+    plan = JoinPlan(
+        principal,
+        CEROS,
+        [_ventas_detalle(t), _cobranzas(t, "summary", prefix="Cob. ")],
+    )
+    nombres = _igual_que_run_join(plan, t)
+    assert ("cobranzas", "Total cobrado", "Cob. Total cobrado") in nombres
+    assert ("ventas", "Fecha", "Fecha (ventas)") in nombres
+
+
+def test_nombres_finales_con_orden(escenario):
+    plan = JoinPlan(
+        _principal(escenario),
+        CEROS,
+        [_ventas_detalle(escenario)],
+        output_column_order=["Importe", "inexistente", "ID cliente", "Importe"],
+    )
+    nombres = _igual_que_run_join(plan, escenario)
+    assert nombres[0][2] == "Importe"
+    assert nombres[1][2] == "ID cliente"
+
+
+def test_nombres_finales_con_resumen_final(escenario):
+    final = AggregationSpec(
+        [GroupBy("Región")], [Aggregation("Total comprado", "sum", "Total vendido")]
+    )
+    plan = JoinPlan(
+        _principal(escenario), KeyOptions(), [_ventas_resumen(escenario)], final_summary=final
+    )
+    nombres = _igual_que_run_join(plan, escenario)
+    assert nombres == [(None, "Región", "Región"), (None, "Total vendido", "Total vendido")]
+
+
+def test_nombres_finales_grande_no_lee_filas():
+    import time
+
+    n = 1_000_000
+    p = pd.DataFrame(
+        {"id": pd.Series(["1"] * n, dtype=_STR), "a": pd.Series(["x"] * n, dtype=_STR)}
+    )
+    s = pd.DataFrame(
+        {"id": pd.Series(["1"] * n, dtype=_STR), "a": pd.Series(["y"] * n, dtype=_STR)}
+    )
+    plan = JoinPlan(_src("p.csv", p), KeyOptions(), [_sec("s.xlsx", s, [("id", "id")], ["a"])])
+    t0 = time.perf_counter()
+    nombres = final_column_names(plan, {"p.csv": p, "s.xlsx": s})
+    assert time.perf_counter() - t0 < 0.5
+    assert [f for _, _, f in nombres] == ["id", "a", "a (s)"]
+
+
+# ---------------------------------------------------------------- F5-05: resumen final sin detalle
+
+
+def _resumenes_finales():
+    return [
+        AggregationSpec(
+            [GroupBy("Región")],
+            [Aggregation("Importe", "sum", "Total"), Aggregation("", "count")],
+        ),
+        # columnas de tres archivos (clientes, ventas y cobranzas) y un período
+        AggregationSpec(
+            [GroupBy("Región"), GroupBy("Fecha", "month")],
+            [
+                Aggregation("Importe", "sum"),
+                Aggregation("Total cobrado", "sum"),
+                Aggregation("Artículo", "count_distinct"),
+            ],
+        ),
+        AggregationSpec([GroupBy("Artículo")], [Aggregation("Importe", "max")]),
+    ]
+
+
+@pytest.mark.parametrize("indice", [0, 1, 2])
+def test_resumen_final_con_solo_las_columnas_usadas_da_lo_mismo(escenario, monkeypatch, indice):
+    final = _resumenes_finales()[indice]
+    plan = JoinPlan(
+        _principal(escenario),
+        CEROS,
+        [
+            _ventas_detalle(escenario, how="inner" if indice == 2 else "left"),
+            _cobranzas(escenario, "summary"),
+        ],
+        final_summary=final,
+    )
+    nuevo = run_join(plan, escenario)
+    # la versión de antes: armar todas las columnas
+    monkeypatch.setattr(join_mod, "_columnas_del_resumen", lambda spec: None)
+    viejo = run_join(plan, escenario)
+    pd.testing.assert_frame_equal(nuevo.df, viejo.df)
+    assert nuevo.column_types == viejo.column_types
+    assert nuevo.warnings == viejo.warnings
+    assert nuevo.diagnosis.rows_result == viejo.diagnosis.rows_result == len(nuevo.df)
+    assert nuevo.unmatched.keys() == viejo.unmatched.keys()
+    for nombre, df in nuevo.unmatched.items():
+        pd.testing.assert_frame_equal(df, viejo.unmatched[nombre])
+
+
+def test_resumen_final_no_arma_las_columnas_que_no_usa(escenario, monkeypatch):
+    plan = JoinPlan(
+        _principal(escenario),
+        CEROS,
+        [_ventas_detalle(escenario)],
+        final_summary=_resumenes_finales()[0],
+    )
+    pedidas: list[set[str] | None] = []
+    original = join_mod._juntar
+
+    def espia(a, tablas, pos, solo):
+        pedidas.append(solo)
+        return original(a, tablas, pos, solo)
+
+    monkeypatch.setattr(join_mod, "_juntar", espia)
+    run_join(plan, escenario)
+    # la última llamada es la de la unión; las anteriores son las muestras del diagnóstico
+    assert pedidas[-1] == {"Región", "Importe"}

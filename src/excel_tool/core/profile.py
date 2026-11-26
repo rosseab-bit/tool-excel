@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from excel_tool.core.explore import COL_CANTIDAD, COL_PORCENTAJE, DistinctResult
+from excel_tool.core.explore import DistinctResult
 from excel_tool.core.io import (
     CsvOptions,
     FileFormat,
@@ -140,7 +140,7 @@ def _como_arrow(serie: pd.Series) -> pd.Series:
     if not isinstance(serie.dtype, pd.StringDtype):
         serie = serie.astype(object).where(serie.notna(), "").astype(str)
         return serie.astype(pd.StringDtype("pyarrow"))
-    return serie.fillna("")
+    return serie.fillna("") if serie.hasnans else serie
 
 
 def _bool(serie: pd.Series) -> np.ndarray:
@@ -261,10 +261,15 @@ def _perfilar_columna(
 
     # acumulados de tabla (fila vacía y hash para detectar repetidas)
     fila_vacia &= vacio_u[codigos]
+    # Sin temporales: se reusa el mismo vector de códigos (int64 → uint64, el -1 de nulo da 0 al
+    # sumar 1, igual que con astype) para no crear 3 copias de `filas` elementos por columna.
     hash_filas *= _MULTIPLICADOR
-    hash_filas ^= codigos.astype(np.uint64) + np.uint64(1)
-    hash_filas ^= hash_filas >> np.uint64(29)
-    del codigos
+    tmp = codigos.view(np.uint64)
+    tmp += np.uint64(1)
+    hash_filas ^= tmp
+    np.right_shift(hash_filas, np.uint64(29), out=tmp)
+    hash_filas ^= tmp
+    del codigos, tmp
 
     idx_no_vacios = np.flatnonzero(~vacio_u)
     vacios = int(cuentas[vacio_u].sum())
@@ -384,7 +389,9 @@ def _avisos(data: ReadResult, columnas: list[ColumnProfile]) -> list[str]:
     return avisos
 
 
-def _info_archivo(data: ReadResult) -> FileInfo:
+def _info_archivo(data: ReadResult, display_name: str | None = None) -> FileInfo:
+    if display_name is not None:  # tabla en memoria: no hay archivo que mirar
+        return FileInfo(display_name, Path(display_name), 0, datetime.now(), data.format)
     estado = data.path.stat()
     return FileInfo(
         name=data.path.name,
@@ -402,8 +409,12 @@ def profile_table(
     on_column: Callable[[ColumnProfile], None] | None = None,
     progress: ProgressCallback | None = None,
     cancel: CancelToken | None = None,
+    display_name: str | None = None,
 ) -> TableProfile:
-    """Perfil de lo ya leído (no vuelve a leer el archivo)."""
+    """Perfil de lo ya leído (no vuelve a leer el archivo).
+
+    Con `display_name` la tabla no viene de un archivo (p. ej. el resultado de una unión):
+    `data.path` no hace falta que exista y `file` queda con ese nombre y tamaño 0."""
     df = data.df
     filas, n_cols = df.shape
     reporte = ThrottledProgress(progress)
@@ -426,11 +437,13 @@ def profile_table(
     vacias = int(fila_vacia.sum()) if n_cols else 0
     if n_cols:
         usados = hash_filas[~fila_vacia]
-        repetidas = len(usados) - len(np.unique(usados))
+        usados.sort()  # en el lugar: np.unique haría otra copia
+        distintas = int((usados[1:] != usados[:-1]).sum()) + 1 if len(usados) else 0
+        repetidas = len(usados) - distintas
     else:
         repetidas = 0
     return TableProfile(
-        file=_info_archivo(data),
+        file=_info_archivo(data, display_name),
         sheets=list(sheets) if sheets else [],
         sheet=data.sheet,
         csv_options=data.csv_options,
@@ -584,16 +597,17 @@ def _tabla_distintos(resultado: DistinctResult) -> pd.DataFrame:
     salida = pd.DataFrame(index=range(len(t)))
     for i, nombre in enumerate(t.columns):
         col = t.iloc[:, i]
-        if nombre == COL_CANTIDAD and i >= len(resultado.columns):
+        if i == len(resultado.columns):
             salida[nombre] = [_numero_para_celda(float(v), 0) for v in col]
-        elif nombre == COL_PORCENTAJE and i >= len(resultado.columns):
+        elif i == len(resultado.columns) + 1:
             salida[nombre] = [_numero_para_celda(float(v)) for v in col]
         else:
             salida[nombre] = col.astype(object).where(col.notna(), "").astype(str).to_numpy()
     return salida
 
 
-_TIPOS_DISTINTOS: dict[str, ColumnType] = {COL_CANTIDAD: "entero", COL_PORCENTAJE: "decimal"}
+def _tipos_distintos(resultado: DistinctResult) -> dict[str, ColumnType]:
+    return {resultado.count_column: "entero", resultado.percent_column: "decimal"}
 
 
 def _aviso_truncado(resultado: DistinctResult) -> str | None:
@@ -625,7 +639,7 @@ def export_profile(
     agregar(HOJA_COLUMNAS, _datos_columnas(profile), _TIPOS_COLUMNAS)
     avisos = list(profile.warnings)
     for r in distincts:
-        agregar(" + ".join(r.columns) or HOJA_DISTINTOS, _tabla_distintos(r), _TIPOS_DISTINTOS)
+        agregar(" + ".join(r.columns) or HOJA_DISTINTOS, _tabla_distintos(r), _tipos_distintos(r))
         if (aviso := _aviso_truncado(r)) is not None:
             avisos.append(aviso)
     if avisos:
@@ -636,6 +650,6 @@ def export_profile(
 def export_distincts(result: DistinctResult, path: Path, format: WriteFormat) -> WriteResult:
     """Guarda una lista de valores distintos (Cantidad y Porcentaje como número)."""
     opciones = WriteOptions(
-        format=format, sheet_name=HOJA_DISTINTOS, column_types=dict(_TIPOS_DISTINTOS)
+        format=format, sheet_name=HOJA_DISTINTOS, column_types=_tipos_distintos(result)
     )
     return write_table(_tabla_distintos(result), Path(path), opciones)

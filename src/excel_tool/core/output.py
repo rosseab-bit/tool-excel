@@ -58,7 +58,7 @@ from excel_tool.core.io import (
     write_table,
 )
 from excel_tool.core.io.writer import nombre_de_hoja
-from excel_tool.core.limits import Destination, Limits
+from excel_tool.core.limits import Destination, Limits, SizeCheck
 from excel_tool.core.progress import (
     CancelToken,
     ProgressCallback,
@@ -512,6 +512,122 @@ def _guardar_hojas(
         partes.append(
             PartResult(path, plan.name, res.rows, plan.value, plan.first_row, plan.last_row)
         )
+    return _cerrar([path], None, partes, total, warnings, unconverted)
+
+
+# ------------------------------------------------------------------------- libro con hojas
+
+
+@dataclass(frozen=True)
+class SheetSpec:
+    name: str
+    df: pd.DataFrame
+    column_types: dict[str, ColumnType] | None = None
+
+
+def _revisar_libro(
+    sheets: list[SheetSpec], destination: Destination, lim: Limits
+) -> tuple[SizeCheck, list[str]]:
+    """Controla cada hoja (xlsx) y, en Google Sheets, el total de celdas del libro.
+    Devuelve el semáforo combinado y los motivos duros ya redactados con el nombre de la hoja."""
+    duros: list[str] = []
+    blandos: list[str] = []
+    partes = 1
+    celdas = 0
+    topes: list[int] = []
+    for hoja in sheets:
+        est = limits_mod.estimate(hoja.df)
+        celdas += est.cells
+        chk = limits_mod.check(est, destination, "xlsx", limits=lim)
+        partes = max(partes, chk.suggested_parts)
+        if chk.max_rows_per_part is not None:
+            topes.append(chk.max_rows_per_part)
+        if chk.level == "obligatorio":
+            if destination != "google_sheets" and est.rows + 1 > lim.excel_max_rows:
+                duros.append(
+                    f"La hoja {hoja.name} tiene {_n(est.rows)} filas y Excel acepta hasta "
+                    f"{_n(lim.excel_max_rows - 1)} por hoja. Guardá el resumen en un archivo "
+                    "y el detalle dividido en partes."
+                )
+            else:
+                duros.append(f"La hoja {hoja.name}: " + " ".join(chk.reasons))
+        elif chk.level == "recomendado":
+            blandos += [f"Hoja {hoja.name}: {r}" for r in chk.reasons]
+    if destination == "google_sheets" and celdas > lim.gs_max_cells:
+        duros.append(
+            f"Google Sheets acepta hasta {_n(lim.gs_max_cells)} celdas por planilla y entre todas "
+            f"las hojas hay {_n(celdas)}. Guardá cada hoja en un archivo aparte."
+        )
+    nivel = "obligatorio" if duros else ("recomendado" if blandos else "ok")
+    filas = max((len(h.df) for h in sheets), default=0)
+    return (
+        SizeCheck(
+            nivel,
+            duros + blandos,
+            partes if nivel != "ok" else 1,
+            max(filas, 1),
+            [],
+            min(topes) if topes else None,
+        ),
+        duros,
+    )
+
+
+def plan_workbook(sheets: list[SheetSpec], destination: Destination) -> SizeCheck:
+    """Semáforo de tamaño para guardar `sheets` en un solo .xlsx (sin escribir nada).
+
+    Combina el de cada hoja (motivos con el nombre de la hoja) y, con `google_sheets`, el total de
+    celdas de todo el libro. `suggested_parts` es el máximo entre hojas."""
+    return _revisar_libro(sheets, destination, limits_mod.load_limits())[0]
+
+
+def save_workbook(
+    sheets: list[SheetSpec],
+    path: Path,
+    *,
+    destination: Destination,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+) -> SaveResult:
+    """Guarda varias tablas en un solo .xlsx, una hoja por `SheetSpec`. Escritura atómica."""
+    if not sheets:
+        raise ExcelToolError("No hay hojas para guardar.")
+    path = Path(path)
+    lim = limits_mod.load_limits()
+    _, duros = _revisar_libro(sheets, destination, lim)
+    if duros:
+        raise ExcelToolError(" ".join(duros), "; ".join(duros))
+
+    warnings: list[str] = []
+    usados: set[str] = set()
+    nombres: list[str] = []
+    for hoja in sheets:
+        final = nombre_de_hoja(hoja.name, usados)
+        if final != hoja.name:
+            warnings.append(
+                f'El nombre de hoja "{hoja.name}" se cambió a "{final}" '
+                "porque Excel no admite esos caracteres, ese largo o un nombre repetido."
+            )
+        nombres.append(final)
+
+    total = sum(len(h.df) for h in sheets)
+    avance = _Avance(progress, total, len(sheets))
+
+    def hojas() -> Iterator[tuple[str, pd.DataFrame]]:
+        for n, (nombre, hoja) in enumerate(zip(nombres, sheets, strict=True), start=1):
+            if n > 1:
+                avance.terminar_parte(len(sheets[n - 2].df))
+            avance.empezar_parte(n)
+            yield nombre, hoja.df
+
+    tipos = {n: h.column_types for n, h in zip(nombres, sheets, strict=True) if h.column_types}
+    resultados = write_sheets(hojas(), path, tipos or None, progress=avance, cancel=cancel)
+    unconverted: dict[str, int] = {}
+    partes: list[PartResult] = []
+    for nombre, res in zip(nombres, resultados, strict=True):
+        _agregar_avisos(warnings, res.warnings)
+        _sumar_no_convertidas(unconverted, res.unconverted)
+        partes.append(PartResult(path, nombre, res.rows, None, 1 if res.rows else 0, res.rows))
     return _cerrar([path], None, partes, total, warnings, unconverted)
 
 
