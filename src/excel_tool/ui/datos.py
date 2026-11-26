@@ -23,7 +23,7 @@ from excel_tool.core.explore import (
     rows_with_value,
     sort_rows,
 )
-from excel_tool.ui import guardar
+from excel_tool.ui import editor_resumen, guardar
 from excel_tool.ui.distintos import mensaje_de
 from excel_tool.ui.formato import formatear_numero
 from excel_tool.ui.grilla import COLUMNA_FILA, Grilla
@@ -44,6 +44,7 @@ SIN_VALOR = {"vacio", "no_vacio"}
 TIPOS_QUE_SIRVEN = {"entero", "decimal", "fecha", "fecha_hora", "si_no"}
 TEXTO_EXPORTAR = "Exportar lo filtrado…"
 TEXTO_GUARDAR_TODO = "Guardar estas filas…"
+TEXTO_RESUMIR = "Resumir…"
 PREGUNTA_OCULTAS = (
     "Hay columnas ocultas en la tabla.\n\n"
     "¿Querés guardar todas las columnas?\n\n"
@@ -131,6 +132,10 @@ class PanelDatos(ttk.Frame):
             botones, text=TEXTO_GUARDAR_TODO, command=self.exportar, state="disabled"
         )
         self.boton_exportar.pack(side="right", padx=(8, 0))
+        self.boton_resumir = ttk.Button(
+            botones, text=TEXTO_RESUMIR, command=self.resumir, state="disabled"
+        )
+        self.boton_resumir.pack(side="right", padx=(8, 0))
         self.etiqueta_conteo = ttk.Label(botones, text="")
         self.etiqueta_conteo.pack(side="right")
 
@@ -187,7 +192,9 @@ class PanelDatos(ttk.Frame):
         self.boton_exportar.configure(
             text=TEXTO_EXPORTAR if len(self.filas) < total else TEXTO_GUARDAR_TODO
         )
-        self.boton_exportar.state(["!disabled"] if self.df is not None else ["disabled"])
+        estado = ["!disabled"] if self.df is not None else ["disabled"]
+        self.boton_exportar.state(estado)
+        self.boton_resumir.state(estado)
 
     def _poner_aviso(self, texto: str | None) -> None:
         self.aviso_valor = texto
@@ -338,6 +345,39 @@ class PanelDatos(ttk.Frame):
         if messagebox.askyesno("Guardar las filas", PREGUNTA_OCULTAS, parent=self.ventana):
             return None
         return [n for n in self.nombres if n in visibles]
+
+    def resumir(self) -> None:
+        """Abre el editor de resumen con las filas que se ven (si hay filtro, las filtradas)."""
+        if self.df is None:
+            return
+        df, filas = self.df, self.filas
+        todas = self._son_todas_en_orden()
+        tipos, nombre = dict(self.tipos), self.nombre_archivo
+
+        def abrir(tabla: Any) -> None:
+            editor_resumen.abrir_resumen(self.ventana, tabla, tipos, nombre)
+
+        if todas:
+            abrir(df)
+            return
+
+        def trabajo(progress, cancel):
+            base = df.iloc[np.asarray(filas, dtype=np.int64)]
+            base.index = pd.RangeIndex(len(base))
+            return base
+
+        def fallo(exc):
+            messagebox.showerror("Resumir", mensaje_de(exc), parent=self.ventana)
+
+        run_in_background(
+            self.ventana,
+            trabajo,
+            title="Preparando las filas",
+            on_success=abrir,
+            on_error=fallo,
+            cancellable=False,
+            modal=False,
+        )
 
     def exportar(self) -> None:
         """Abre el paso Guardar con las filas filtradas y ordenadas que se ven en la grilla."""

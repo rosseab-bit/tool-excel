@@ -78,7 +78,10 @@ def test_resumen_ventas_coincide(e3, fixtures_esperados):
         assert Decimal(r["suma_importe"]) == sum(
             (_a_decimal(x) for x in buenos["Importe"]), Decimal(0)
         )
-        assert r["importes_invalidos"] == len(grupo) - len(buenos)
+        malos = grupo[~valido.loc[grupo.index]]["Importe"]
+        assert r["importes_vacios"] == int((malos == "").sum())
+        assert r["importes_invalidos"] == int((malos != "").sum())
+        assert r["importes_invalidos"] + r["importes_vacios"] == len(grupo) - len(buenos)
         assert r["articulos_distintos"] == grupo["Artículo"].nunique()
         ultima = pd.to_datetime(grupo["Fecha"], format="%d/%m/%Y").max()
         assert r["ultima_fecha"] == ultima.strftime("%d/%m/%Y")

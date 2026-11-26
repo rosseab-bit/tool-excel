@@ -18,6 +18,7 @@ Dataclasses y firmas públicas que cruzan de `src/excel_tool/core/` a `src/excel
 | `core/progress`, `TableProfile`, `ColumnProfile`, `profile_table`, `value_counts`, `rows_with_value`, filtros, orden, páginas, `export_profile`, preferencias | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `ui/worker` (hilo + cola + progreso + cancelar) | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `core/limits`, `core/split`, `core/output` (`save_result`, `split_file`), paso Guardar (UI) | 3 | Cerrado (OK PM, ADR-032); implementado |
+| `core/normalize`, `core/aggregate`, `core/join`, recetas, editor de resumen (UI) | 4 | Cerrado (OK PM, ADR-034); implementado |
 | Errores del core hacia la UI (cómo se muestran) | 2 | Cerrado (OK PM, ADR-023); implementado |
 | `SizeEstimate`, `SizeCheck`, `SplitSpec`, `OutputSpec`, `save_result` | 3 | Borrador en PLAN.md §2 |
 | `AggregationSpec`, `JoinPlan`, `SourceSpec`, `SecondarySpec`, `KeyOptions`, `diagnose_join`, `run_join` | 4 | Borrador en PLAN.md §2 |
@@ -578,3 +579,127 @@ def abrir_guardar(parent: tk.Misc, df: pd.DataFrame, *, nombre_sugerido: str,
   - Solo guardar: CSV.
 - **5. Guardar:** diálogo de guardar y después `save_result` en el worker, con progreso y Cancelar. Al terminar muestra "Se guardaron N archivos con M filas en total (coincide con el resultado ✅)" y el botón "Abrir carpeta" (`platform_utils.open_folder`).
 - **La UI no calcula:** todo lo que muestra sale del core.
+
+### Fase 4 (cerrado, OK del PM, ADR-034; implementado)
+
+#### `core/normalize.py`
+```python
+@dataclass(frozen=True)
+class KeyOptions:
+    trim: bool = True                 # recortar espacios (también dobles espacios internos → uno)
+    ignore_case: bool = True
+    strip_leading_zeros: bool = False # "00012" ↔ "12": opción que el usuario activa (ADR-034); solo afecta claves que son todo dígitos
+
+def normalize_keys(s: pd.Series, options: KeyOptions) -> pd.Series: ...   # vectorizado, almacenamiento pyarrow
+def match_key_columns(principal: list[str], other: list[str]) -> list[tuple[str, str]]: ...
+# empareja por nombre igual ignorando mayúsculas, espacios y tildes ("ID cliente" ↔ "id  Cliente")
+```
+
+#### `core/aggregate.py`
+```python
+AggFunc = Literal["sum", "count", "count_distinct", "mean", "min", "max", "first", "last", "join_text"]
+
+@dataclass(frozen=True)
+class GroupBy:
+    column: str
+    period: Literal["month", "year"] | None = None   # agrupar por mes/año de una fecha ("2024-03", "2024")
+
+@dataclass(frozen=True)
+class Aggregation:
+    column: str            # "" para count (contar filas)
+    func: AggFunc
+    name: str | None = None   # None → automático: "Suma de Importe", "Cantidad de filas", ...
+
+@dataclass(frozen=True)
+class AggregationSpec:
+    group_by: list[GroupBy]
+    aggregations: list[Aggregation]
+
+@dataclass(frozen=True)
+class SummaryResult:
+    df: pd.DataFrame                  # columnas: group_by (en orden) + aggregations; texto con formato argentino
+    column_types: dict[str, ColumnType]   # para guardar números y fechas reales
+    not_numeric: dict[str, int]       # columna → celdas que no se pudieron convertir (no suman)
+    warnings: list[str]
+
+def summarize(df: pd.DataFrame, spec: AggregationSpec, *, column_types: dict[str, ColumnType] | None = None,
+              progress=None, cancel=None) -> SummaryResult: ...
+def default_name(agg: Aggregation) -> str: ...
+```
+- Sumar y promedio convierten con `core/types` (estilo decimal detectado); lo que no convierte se cuenta en `not_numeric` y no suma. Mín/máx según el tipo (número, fecha, texto). Listar valores: "A, B, C" sin repetidos, en orden de aparición, con tope de largo y aviso. Vacíos de la clave de grupo → grupo "(vacío)".
+
+#### `core/join.py`
+```python
+@dataclass(frozen=True)
+class SourceSpec:
+    name: str; path: Path; read_options: ReadOptions; columns: list[str]   # columnas a conservar
+
+@dataclass(frozen=True)
+class SecondarySpec(SourceSpec):
+    key_pairs: list[tuple[str, str]]          # (columna del principal, columna de este archivo)
+    how: Literal["left", "inner"] = "left"
+    mode: Literal["detail", "summary", "first"] = "detail"   # la UI obliga a elegir (sin default visible)
+    summary: AggregationSpec | None = None    # mode == "summary"; la clave va siempre en el grupo
+    prefix: str | None = None
+
+@dataclass(frozen=True)
+class JoinPlan:
+    principal: SourceSpec
+    key_options: KeyOptions
+    secondaries: list[SecondarySpec]          # 1..N, en orden
+    output_column_order: list[str] | None = None
+    final_summary: AggregationSpec | None = None
+    output: OutputSpec | None = None
+
+@dataclass(frozen=True)
+class SecondaryDiagnosis:
+    name: str; keys_principal: int; keys_matched: int
+    keys_unmatched_sample: list[str]; secondary_orphans: int; secondary_orphans_sample: list[str]
+    keys_with_many_rows: int; example_many: tuple[str, int] | None   # ("1045", 12) para el mensaje
+    rows_after: int                     # filas del resultado tras unir este archivo (exacto, sin unir)
+
+@dataclass(frozen=True)
+class JoinDiagnosis:
+    secondaries: list[SecondaryDiagnosis]
+    rows_result: int; columns_result: int
+    size: SizeEstimate
+    memory: MemoryCheck                 # ¿alcanza la memoria para unir?
+    many_details: bool                  # más de un secundario en detalle
+    warnings: list[str]                 # castellano, con números argentinos
+
+def diagnose_join(plan: JoinPlan, tables: dict[str, pd.DataFrame], *, progress=None, cancel=None) -> JoinDiagnosis: ...
+def run_join(plan: JoinPlan, tables: dict[str, pd.DataFrame], *, progress=None, cancel=None) -> JoinResult: ...
+
+@dataclass(frozen=True)
+class JoinResult:
+    df: pd.DataFrame; column_types: dict[str, ColumnType]
+    unmatched: dict[str, pd.DataFrame]   # por secundario: filas del secundario sin pareja (para hojas extra)
+    diagnosis: JoinDiagnosis; warnings: list[str]
+```
+- `tables`: las tablas ya leídas (la UI las leyó con `read_table`), por `SourceSpec.name`; el core no vuelve a leer.
+- Las claves se normalizan en columnas auxiliares; el resultado muestra la clave **original** del principal una sola vez.
+- Sin secundarios en detalle y sin resumen final → `len(result) == len(principal)`, verificado; si no, `ExcelToolError`.
+- Nombres repetidos entre archivos: `<columna> (<archivo sin extensión>)` o el `prefix`.
+- Memoria: si `diagnosis.memory.ok` es False, `run_join` no arranca (`ExcelToolError` con el mensaje).
+
+#### Recetas (`core/recipe.py`)
+```python
+def save_recipe(plan: JoinPlan, path: Path) -> None: ...
+def load_recipe(path: Path) -> RecipeLoad: ...  # RecipeLoad(plan, missing: nombres de fuente sin archivo, warnings) (F4-04)
+# versión del formato; rutas relativas a la receta si se puede, si no absolutas
+```
+- JSON utf-8, con `"version": 1`. Rutas guardadas con `/`; al cargar, `Path` del sistema. Archivos que no existen → la receta carga igual y avisa cuáles faltan (el usuario elige el nuevo archivo del mes).
+- (ADR-034) `diagnose_join` sugiere la opción: si con `strip_leading_zeros=True` coincidirían bastantes claves más, agrega un aviso ("Si sacás los ceros a la izquierda, coinciden 27 clientes en vez de 5") y el campo `SecondaryDiagnosis.keys_matched_without_zeros: int | None`.
+
+#### Editor de resumen (frontend, `ui/editor_resumen.py`, adelantado de la Fase 5)
+```python
+class EditorResumen(ttk.Frame):
+    def __init__(self, parent, df: pd.DataFrame, column_types: dict[str, ColumnType], *,
+                 fixed_group: list[str] | None = None,        # la clave: marcada y sin poder quitarla
+                 on_change: Callable[[AggregationSpec], None] | None = None): ...
+    def spec(self) -> AggregationSpec: ...
+    def set_spec(self, spec: AggregationSpec) -> None: ...    # para recetas
+```
+- Agrupar por (casillas; "por mes" / "por año" para columnas de fecha), tabla de cálculos `[columna ▼] [operación ▼] [nombre]` con "+ Agregar cálculo", nombre automático editable (`aggregate.default_name`), Sumar/Promedio solo para columnas numéricas o mixtas (con aviso), vista previa con `summarize` en el worker sobre una muestra o la tabla completa si es chica.
+- (F4-10) `summarize` con `group_by` vacío y al menos un cálculo devuelve una sola fila (toda la tabla). Sin grupos ni cálculos → `ExcelToolError`.
+- (ADR-037) `run_join`: en secundarios en `summary`, las filas del principal sin pareja llevan "0" en las columnas de `sum`, `count` y `count_distinct` (tipo entero/decimal se mantiene) y "" en el resto. El diagnóstico no cambia.

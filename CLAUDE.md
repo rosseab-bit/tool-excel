@@ -31,7 +31,7 @@ Plan completo: `PLAN.md`. Equipo y flujo de trabajo: `docs/equipo.md`.
 - El explorador nunca carga todas las filas en la grilla: paginar. Los valores distintos se calculan a pedido.
 - El join trabaja siempre sobre un `JoinPlan` (principal + lista de secundarios). Nunca asumir que hay solo 2 archivos.
 - Cada secundario tiene modo `detail` | `summary` | `first`. Los resúmenes usan SIEMPRE `aggregate.summarize` (también el resumen final).
-- Sin secundarios en `detail` y sin resumen final, el resultado DEBE tener las mismas filas que el principal: verificarlo en código y en tests.
+- Sin secundarios en `detail` y sin resumen final, el resultado DEBE tener las mismas filas que el principal: verificarlo en código y en tests. (Vale con uniones "completar" y resúmenes solo por la clave; un resumen por clave + otra columna o "solo los que están en ambos" cambian las filas a propósito y el diagnóstico lo explica: ADR-036.)
 - Más de un secundario en `detail` → el diagnóstico tiene que avisarlo.
 - Toda función nueva del core lleva test, probando al menos un CSV y un xlsx.
 - La UI no hace cálculos: arma un dataclass de config y llama al core.

@@ -669,11 +669,13 @@ def esperados_escenario_3(d: dict) -> dict[str, dict]:
     por_cliente: dict[str, dict] = {}
     for v in ventas:
         r = por_cliente.setdefault(
-            v["id"], {"filas": 0, "centavos": 0, "invalidos": 0, "arts": set(), "ultima": None}
+            v["id"],
+            {"filas": 0, "centavos": 0, "invalidos": 0, "vacios": 0, "arts": set(), "ultima": None},
         )
         r["filas"] += 1
         r["centavos"] += v["centavos"] or 0
-        r["invalidos"] += v["centavos"] is None
+        r["invalidos"] += v["centavos"] is None and v["importe_texto"] != ""
+        r["vacios"] += v["importe_texto"] == ""
         r["arts"].add(v["articulo"])
         r["ultima"] = max(r["ultima"] or v["fecha"], v["fecha"])
     resumen_ventas = {
@@ -681,7 +683,11 @@ def esperados_escenario_3(d: dict) -> dict[str, dict]:
             "Calculado desde la definicion de los datos del generador. Las claves son los ID "
             "tal como estan en ventas.csv (solo aparecen clientes con ventas). 'suma_importe' "
             "suma solo los importes validos (punto decimal, sin pasar por float). "
-            "'importes_invalidos' son los que no se pueden convertir (texto, vacio, '12,34,5'). "
+            "'importes_invalidos' son los que traen algo que no se puede convertir ('n/a', 'abc', "
+            "'12,34,5'): la app los cuenta y avisa. 'importes_vacios' son celdas sin nada: no "
+            "suman, pero NO son invalidos (la app los informa aparte, igual que la Fase 1). "
+            "'celdas_invalidas' lista las dos clases (con 'vacia': true para el vacio): en total 4 "
+            "celdas que no suman = 3 invalidos + 1 vacio. "
             "'ultima_fecha' mira todas las filas del cliente (dd/mm/aaaa). 'fila' es la fila de "
             "datos (1 = primera sin encabezado); 'fila_en_archivo' cuenta el encabezado. "
             "'ids_fuera_de_clientes' son ventas de IDs que no estan en clientes.xlsx."
@@ -691,6 +697,7 @@ def esperados_escenario_3(d: dict) -> dict[str, dict]:
                 "filas": r["filas"],
                 "suma_importe": _cents(r["centavos"]),
                 "importes_invalidos": r["invalidos"],
+                "importes_vacios": r["vacios"],
                 "articulos_distintos": len(r["arts"]),
                 "ultima_fecha": _fecha_ar(r["ultima"]),
             }
@@ -702,6 +709,7 @@ def esperados_escenario_3(d: dict) -> dict[str, dict]:
                 "fila_en_archivo": n + 1,
                 "id_cliente": v["id"],
                 "valor": v["importe_texto"],
+                "vacia": v["importe_texto"] == "",
             }
             for n, v in enumerate(ventas, start=1)
             if v["centavos"] is None

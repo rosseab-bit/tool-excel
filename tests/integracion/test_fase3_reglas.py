@@ -20,9 +20,6 @@ JERGA_FASE3 = re.compile(
     r"chunk|spec|output)\b",
     re.IGNORECASE,
 )
-LIMITES = re.compile(
-    r"1_?048_?57[56]|20_?000_?000|16_?384|(?<![\d_])5_?000_?000|(?<![\d_])300_?000"
-)
 
 
 def _py(carpeta: Path = SRC):
@@ -66,18 +63,45 @@ def _cadenas_de_texto(ruta: Path):
             yield n.lineno, n.value
 
 
+LIMITES_NUMERICOS = {1_048_575, 1_048_576, 20_000_000, 16_384, 5_000_000, 300_000}
+
+
+def _constantes_numericas(codigo: str) -> set[int | float]:
+    """Constantes numéricas (int/float) del AST: no mira texto, docstrings ni comentarios."""
+    return {
+        n.value
+        for n in ast.walk(ast.parse(codigo))
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, int | float)
+        and not isinstance(n.value, bool)
+    }
+
+
 def test_los_limites_estan_solo_en_core_limits():
     for ruta in _py():
         if _rel(ruta) == "core/limits.py":
             continue
-        hallazgo = LIMITES.search(ruta.read_text(encoding="utf-8"))
-        assert not hallazgo, f"{_rel(ruta)}: {hallazgo.group(0)}"
+        hallazgo = _constantes_numericas(ruta.read_text(encoding="utf-8")) & LIMITES_NUMERICOS
+        assert not hallazgo, f"{_rel(ruta)}: {sorted(hallazgo)}"
 
 
-def test_el_regex_de_limites_detecta_lo_que_debe():
-    for malo in ("1048576", "1_048_576", "1048575", "20_000_000", "5_000_000", "300000"):
-        assert LIMITES.search(f"x = {malo}"), malo
-    assert not LIMITES.search("x = 1500000") and not LIMITES.search("x = 25_000_000")
+def test_el_detector_de_limites_mira_solo_numeros_del_ast():
+    for malo in (
+        "1048576",
+        "1_048_576",
+        "1048575",
+        "20_000_000",
+        "5_000_000",
+        "300000",
+        "300000.0",
+    ):
+        assert _constantes_numericas(f"x = {malo}") & LIMITES_NUMERICOS, malo
+    assert not _constantes_numericas("x = 1500000") & LIMITES_NUMERICOS
+    assert not _constantes_numericas("x = 25_000_000") & LIMITES_NUMERICOS
+    # El falso positivo de la Fase 4: el número dentro de un texto no cuenta.
+    assert not _constantes_numericas(
+        'def f():\n    """0,30000000000000004"""\n    return "x 300000 y"  # 1048576'
+    )
 
 
 def test_json_de_limites_solo_se_lee_en_limits():

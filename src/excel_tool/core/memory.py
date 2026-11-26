@@ -65,3 +65,38 @@ def check_memory(path: Path, *, format: str | None = None, margin: float = 0.8) 
         )
         log.warning("Memoria insuficiente para %s: %s", path.name, message)
     return MemoryCheck(needed, available, ok, message)
+
+
+# Bytes por celda de un resultado ya armado (texto pyarrow: ~10 caracteres + offsets + el
+# vector auxiliar de la unión). Medido en F4-03 con el escenario grande, con margen.
+BYTES_POR_CELDA_RESULTADO = 32
+
+
+def check_result_memory(
+    rows: int,
+    columns: int,
+    *,
+    extra_bytes: int = 0,
+    bytes_per_cell: int = BYTES_POR_CELDA_RESULTADO,
+    margin: float = 0.8,
+) -> MemoryCheck:
+    """Estima la memoria de un resultado de `rows` x `columns` y la compara con la libre.
+
+    No mira archivos: los datos de entrada ya están cargados. `extra_bytes` suma lo que se
+    necesita aparte de las celdas (por ejemplo, los vectores de posiciones de la unión).
+    """
+    needed = int(rows) * int(columns) * bytes_per_cell + int(extra_bytes)
+    available = platform_utils.available_memory()
+    if available is None:
+        log.info("Memoria libre desconocida; se deja armar el resultado")
+        return MemoryCheck(needed, None, True, "")
+    ok = needed <= available * margin
+    message = ""
+    if not ok:
+        message = (
+            "El resultado es muy grande para la memoria libre de esta computadora: "
+            f"necesita alrededor de {_monto(needed)} y hay {_monto(available)} libres. "
+            "Probá con menos columnas, resumí alguno de los archivos o cerrá otros programas."
+        )
+        log.warning("Memoria insuficiente para el resultado: %s", message)
+    return MemoryCheck(needed, available, ok, message)

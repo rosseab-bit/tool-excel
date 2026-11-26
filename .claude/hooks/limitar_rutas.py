@@ -36,14 +36,16 @@ PERMITIDAS: dict[str, list[str]] = {
         "README.md",
         ".gitignore",
         ".gitattributes",
+        "docs/progreso/",
     ],
-    "frontend": ["src/excel_tool/ui/", "src/excel_tool/assets/", "tests/ui/"],
+    "frontend": ["src/excel_tool/ui/", "src/excel_tool/assets/", "tests/ui/", "docs/progreso/"],
     "qa": [
         "tests/integracion/",
         "tests/fixtures/",
         "tests/conftest.py",
         "scripts/make_fixtures.py",
         "docs/qa/",
+        "docs/progreso/",
     ],
 }
 
@@ -77,6 +79,12 @@ def main() -> None:
         _bloquear(f"limitar_rutas.py: rol desconocido '{rol}'. Revisar el frontmatter del agente.")
 
     datos = json.load(sys.stdin)
+    # Las reglas del líder (sesión principal) también llegan a los subagentes: ahí no se aplican.
+    if rol == "lider-tecnico" and (
+        datos.get("agent_id") or datos.get("agent_type") not in (None, "", "lider-tecnico")
+    ):
+        sys.exit(0)
+    herramienta = datos.get("tool_name", "")
     herramienta = datos.get("tool_name", "")
     entrada = datos.get("tool_input", {}) or {}
 

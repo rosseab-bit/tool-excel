@@ -135,7 +135,7 @@ Ninguno bloqueante ni de gravedad media o alta.
 - Con `tests/fixtures/generados/grandes/rendimiento_2M.csv`: tiene que mostrar el progreso, poder cancelarse y
   cerrarse en un instante; cerrar la ventana a mitad del análisis.
 
-## Para probar en Windows (PM): checklist de las Fases 0 a 3 (la Fase 3 es la sección E; el detalle de la Fase 3 está en `docs/qa/fase-3.md`)
+## Para probar en Windows (PM): checklist de las Fases 0 a 4 (la Fase 3 es la sección E y la Fase 4 la G; el detalle está en `docs/qa/fase-3.md` y `docs/qa/fase-4.md`)
 Lo que hay que hacer en una PC nueva con Windows (ideal: 8 GB de RAM, como las de los usuarios). Anotar al lado
 de cada paso OK / FALLA / observación (con captura si falla). Referencias: `README.md`, `docs/fases/fase-0.md`,
 `fase-1.md` y `fase-2.md` (Notas).
@@ -289,6 +289,41 @@ abierto en Excel al LEER) no se repite: acá se prueba al GUARDAR. Referencias: 
     1,15 GB, igual que el perfil: guardar no lo sube) y tiempos (Linux: guardar CSV 29 s, .xlsx 173 s).
 42. Repetir 28, 29, 31 y 37 con el `.exe` compilado (el paso 25 ya prueba que `xlsxwriter` entra en el ejecutable).
 
+**G. Resumir, unir varios archivos y recetas (Fase 4)**
+Todavía no hay pantalla para unir ni para guardar recetas (llegan en la Fase 5): se prueba el editor "Resumir…" del
+explorador y, con scripts, el core. Se corre desde la carpeta del repo con `.venv\Scripts\python`. Referencias:
+`docs/fases/fase-4.md` (Notas) y `docs/qa/fase-4.md`.
+44. **Resumir con Excel real:** abrir `escenario_3\ventas.csv` (punto y coma, codificación de Windows), pestaña Datos, "Resumir…": tildar "ID cliente", "+ Agregar cálculo" -> Sumar -> Importe
+    y "Contar filas", "Ver cómo queda": 29 filas, aviso "3 celdas de Importe no son números y no se sumaron". "Guardar
+    el resumen…" -> Excel -> abrir el .xlsx en Excel real: "Suma de Importe" y "Cantidad de filas" son **números**
+    (alineados a la derecha), el cliente 16 suma 21.700,65 y tiene 5 compras. Repetir agrupando "Fecha" "por mes":
+    meses 2024-01 a 2024-06 y 87 filas en total; la columna sale como "Fecha (mes)".
+45. **Receta de Linux abierta en Windows:** en Linux, `.venv/bin/python tests/integracion/receta_cruzada.py crear
+    /tmp/prueba_receta`, copiar la carpeta entera (con `receta.json` y `esperado.json`) a Windows (por ejemplo a
+    `C:\Users\<usuario>\Documents\prueba_receta`) y correr `.venv\Scripts\python tests\integracion\receta_cruzada.py
+    verificar C:\Users\<usuario>\Documents\prueba_receta`. Tiene que decir **OK ... mismo resultado (30 filas, con
+    división)**. Abrir `receta.json` en el Bloc de notas: las rutas van con `/`, sin `\`.
+46. **Receta de Windows abierta en Linux (al revés):** en Windows, `crear C:\Users\<usuario>\Documents\prueba_receta2`,
+    copiar la carpeta a Linux y `verificar` ahí: OK. Mismo script y mismo resultado (la huella es la misma en los
+    dos sistemas).
+47. **Rutas en otra unidad:** en Windows, `crear C:\recetas\r1 --datos D:\datos_mes` (la unidad D: puede ser un pendrive o
+    una carpeta de red `\\servidor\compartida\datos`): en `receta.json` las rutas de los datos salen absolutas
+    (`D:/datos_mes/clientes.xlsx`) y `verificar C:\recetas\r1` da OK. Desenchufar el pendrive y repetir `verificar`:
+    tiene que decir **FALLA: faltan archivos: ['clientes', 'ventas', 'cobranzas']** (no un traceback). Probar
+    también con una carpeta con espacios y tildes ("Mis datos\Ñandú").
+48. **Memoria del join en Windows (a revalidar):** el aviso de memoria cuenta 32 bytes por celda del resultado
+    (medido en Linux). Con `grandes\clientes_grande.csv` x `ventas_grande.csv`, abrir el
+    Administrador de tareas y correr `.venv\Scripts\python tests\integracion\medicion_fase4.py detalle` y `... resumen`
+    (en Linux: detalle 2.519.998 filas en ~9 s con pico **889 MB**; resumen 200.000 filas con **634 MB**). Anotar el
+    pico de cada uno (columna "Memoria máxima" o el valor más alto de la columna "Memoria") y los tiempos. Tiene que
+    quedar **<= 1,5 GB**; si en Windows pasa de eso, o si `memoria_ok` sale False en una PC de 8 GB, avisar: hay que
+    cambiar los 32 B/celda de `core/memory.py`.
+49. **El editor de resumen en 1366x768:** en una notebook de 1366x768 (escala 100 %, 125 % y 150 %) abrir "Resumir…" con
+    `ventas.csv`, agregar dos cálculos y "Ver cómo queda": la ventana tiene que entrar entera, con "Guardar el resumen…" y
+    "Cerrar" a la vista y sin tapar la barra de tareas. **En Linux hoy mide 790 px y NO entra (BUG F4-A de
+    `docs/qa/fase-4.md`)**; anotar si en Windows pasa lo mismo y cuánto se corta.
+50. Repetir 44 con el `.exe` compilado (el "Resumir…" tiene que abrir sin consola y sin errores).
+
 **F. Para informar**
 43. Pasar al líder: resultado de cada paso (OK / FALLA / observación), los números de tiempo y memoria de los
-    pasos 7, 20, 21, 25 y 41, y el log de `%LOCALAPPDATA%\ExcelJoinTool\logs` si algo falló.
+    pasos 7, 20, 21, 25, 41 y 48, y el log de `%LOCALAPPDATA%\ExcelJoinTool\logs` si algo falló.

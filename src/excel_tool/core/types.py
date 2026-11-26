@@ -7,11 +7,14 @@ las celdas que no se pueden convertir.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 
 from excel_tool.core.progress import CancelToken
 
@@ -56,12 +59,38 @@ def _como_texto(values: pd.Series) -> np.ndarray:
     return np.where(pd.isna(arr), "", arr).astype(object)
 
 
+@functools.cache
+def _espacios() -> str:
+    """Los mismos caracteres que `str.strip()` de Python considera espacio."""
+    return "".join(c for c in map(chr, range(0x3001)) if c.isspace())
+
+
 def _strip(arr: np.ndarray) -> pd.Series:
-    return pd.Series(arr, dtype=object).str.strip()
+    """Texto sin espacios en los bordes (con pyarrow; mismo resultado que `str.strip`)."""
+    try:
+        recortado = pc.utf8_trim(pa.array(arr, type=pa.string()), characters=_espacios())
+    except (pa.ArrowInvalid, pa.ArrowTypeError):
+        return pd.Series(arr, dtype=object).str.strip()
+    return pd.Series(recortado.to_numpy(zero_copy_only=False), dtype=object)
+
+
+def _a_arrow(serie: pd.Series) -> pa.Array:
+    return pa.array(serie.to_numpy(dtype=object), type=pa.string())
+
+
+def _busca(serie: pd.Series, patron: str) -> np.ndarray:
+    """Qué valores contienen el patrón. Usa RE2 de pyarrow (≈7 veces más rápido que `re`);
+    si el texto no entra en Arrow (caracteres inválidos), cae a las regex de Python."""
+    try:
+        hit = pc.match_substring_regex(_a_arrow(serie), patron)
+    except (pa.ArrowInvalid, pa.ArrowTypeError):
+        return serie.str.contains(patron, regex=True).fillna(False).to_numpy(dtype=bool)
+    return hit.fill_null(False).to_numpy(zero_copy_only=False)
 
 
 def _match(serie: pd.Series, patron: str) -> np.ndarray:
-    return serie.str.fullmatch(patron).fillna(False).to_numpy(dtype=bool)
+    """Qué valores cumplen el patrón completo."""
+    return _busca(serie, f"^(?:{patron})$")
 
 
 def _parse_fechas(limpio: pd.Series) -> tuple[pd.Series, np.ndarray]:
@@ -171,19 +200,27 @@ def _bloques(unicos):
         yield ini, _strip(trozo)
 
 
-def _cuentas_estilo(limpio: pd.Series) -> tuple[int, int, int]:
+def _cuentas_estilo(limpio: pd.Series, pesos: np.ndarray | None = None) -> tuple[int, int, int]:
     """(con separador, válidos como argentino, válidos como inglés).
 
     Solo importan las celdas con "." o ",": un número sin separadores vale igual en los dos.
+    Con `pesos` (repeticiones de cada valor distinto) cuenta celdas y no valores distintos.
     """
-    con_sep = limpio[limpio.str.contains(r"[.,]", regex=True).to_numpy(dtype=bool)]
+    hay = _busca(limpio, r"[.,]")
+    con_sep = limpio[hay]
     if con_sep.empty:
         return 0, 0, 0
+    w = None if pesos is None else pesos[hay]
+
+    def contar(mascara: np.ndarray) -> int:
+        return int(mascara.sum() if w is None else w[mascara].sum())
+
     cuentas = []
     for estilo in (",", "."):
         e, d = _patrones_numero(estilo)  # type: ignore[arg-type]
-        cuentas.append(int(_match(con_sep, f"{e}|{d}").sum()))
-    return len(con_sep), cuentas[0], cuentas[1]
+        cuentas.append(contar(_match(con_sep, f"{e}|{d}")))
+    total = len(con_sep) if w is None else int(w.sum())
+    return total, cuentas[0], cuentas[1]
 
 
 def _elegir_estilo(con_sep: int, argentino: int, ingles: int) -> DecimalStyle:
@@ -256,53 +293,107 @@ def detect_types(
     }
 
 
-def _fallidas(original: np.ndarray, falla: np.ndarray) -> list[tuple[int, str]]:
-    return [(int(i), str(original[i])) for i in np.flatnonzero(falla)]
+def _fallidas(codigos: np.ndarray, unicos, falla_u: np.ndarray) -> list[tuple[int, str]]:
+    """(posición, valor original) de las celdas cuyo valor distinto falló."""
+    if not falla_u.any():
+        return []
+    pos = np.flatnonzero(falla_u[codigos])
+    return [(int(i), str(unicos[codigos[i]])) for i in pos]
 
 
-def to_number(values: pd.Series, decimal_style: DecimalStyle | None = None) -> ConversionResult:
-    """Convierte a float. Sin estilo pedido, lo detecta de la serie."""
-    original = _como_texto(values)
-    limpio = _strip(original)
-    estilo = decimal_style or _estilo_de(limpio)
+def _a_float(validos: pd.Series, estilo: DecimalStyle) -> np.ndarray:
+    """Float de textos que ya cumplen el patrón de número del estilo."""
+    try:
+        a = _a_arrow(validos)
+        if estilo == ",":
+            a = pc.replace_substring(a, ".", "")
+            a = pc.replace_substring(a, ",", ".")
+        else:
+            a = pc.replace_substring(a, ",", "")
+        return a.cast(pa.float64()).to_numpy(zero_copy_only=False)
+    except (pa.ArrowInvalid, pa.ArrowTypeError):
+        if estilo == ",":
+            normal = validos.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+        else:
+            normal = validos.str.replace(",", "", regex=False)
+        return pd.to_numeric(normal, errors="coerce").to_numpy(dtype="float64")
+
+
+def _numeros(limpio: pd.Series, estilo: DecimalStyle) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(float con NaN, es número, vacío) de un bloque de texto ya limpio."""
     vacio = (limpio == "").to_numpy(dtype=bool)
     pat_ent, pat_dec = _patrones_numero(estilo)
     ok = (_match(limpio, pat_ent) | _match(limpio, pat_dec)) & ~vacio
-    if estilo == ",":
-        normal = limpio.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-    else:
-        normal = limpio.str.replace(",", "", regex=False)
-    numeros = pd.to_numeric(normal.where(ok), errors="coerce").astype("float64")
+    numeros = np.full(len(limpio), np.nan, dtype="float64")
+    idx = np.flatnonzero(ok)
+    if len(idx):
+        numeros[idx] = _a_float(limpio.iloc[idx], estilo)
+    return numeros, ok, vacio
+
+
+def to_number(values: pd.Series, decimal_style: DecimalStyle | None = None) -> ConversionResult:
+    """Convierte a float. Sin estilo pedido, lo detecta de la serie.
+
+    Convierte solo los valores distintos y expande el resultado con los códigos.
+    """
+    codigos, unicos = _resolver_unicos(values)
+    estilo = decimal_style
+    if estilo is None:
+        repeticiones = np.bincount(codigos, minlength=len(unicos))
+        totales = np.zeros(3, dtype=np.int64)
+        for ini, limpio in _bloques(unicos):
+            totales += _cuentas_estilo(limpio, repeticiones[ini : ini + len(limpio)])
+        estilo = _elegir_estilo(*(int(x) for x in totales))
+    valores = np.empty(len(unicos), dtype="float64")
+    falla = np.zeros(len(unicos), dtype=bool)
+    for ini, limpio in _bloques(unicos):
+        num, ok, vacio = _numeros(limpio, estilo)
+        valores[ini : ini + len(num)] = num
+        falla[ini : ini + len(num)] = ~ok & ~vacio
     return ConversionResult(
-        values=pd.Series(numeros.to_numpy(), index=values.index),
-        failed=_fallidas(original, ~ok & ~vacio),
+        values=pd.Series(valores[codigos], index=values.index),
+        failed=_fallidas(codigos, unicos, falla),
     )
 
 
 def to_date(values: pd.Series) -> ConversionResult:
-    """Convierte a fecha o fecha-hora (datetime64)."""
-    original = _como_texto(values)
-    limpio = _strip(original)
-    vacio = (limpio == "").to_numpy(dtype=bool)
-    fechas, _ = _parse_fechas(limpio)
-    ok = fechas.notna().to_numpy(dtype=bool)
+    """Convierte a fecha o fecha-hora (datetime64). Convierte solo los valores distintos."""
+    codigos, unicos = _resolver_unicos(values)
+    partes: list[np.ndarray] = []
+    falla = np.zeros(len(unicos), dtype=bool)
+    for ini, limpio in _bloques(unicos):
+        vacio = (limpio == "").to_numpy(dtype=bool)
+        fechas, _ = _parse_fechas(limpio)
+        partes.append(fechas.to_numpy())
+        falla[ini : ini + len(limpio)] = fechas.isna().to_numpy(dtype=bool) & ~vacio
+    if partes:
+        fechas_u = np.concatenate(partes)
+    else:
+        fechas_u = np.array([], dtype="datetime64[ns]")
     return ConversionResult(
-        values=pd.Series(fechas.to_numpy(), index=values.index),
-        failed=_fallidas(original, ~ok & ~vacio),
+        values=pd.Series(fechas_u[codigos], index=values.index),
+        failed=_fallidas(codigos, unicos, falla),
     )
 
 
 def to_bool(values: pd.Series) -> ConversionResult:
     """Convierte sí/no, verdadero/falso, true/false a booleano (0 y 1 no valen: son enteros)."""
-    original = _como_texto(values)
-    limpio = _strip(original)
-    vacio = (limpio == "").to_numpy(dtype=bool)
-    bajo = limpio.str.lower()
-    es_si = bajo.isin(_TRUE).to_numpy(dtype=bool)
-    es_no = bajo.isin(_FALSE).to_numpy(dtype=bool)
+    codigos, unicos = _resolver_unicos(values)
+    es_si_u = np.zeros(len(unicos), dtype=bool)
+    es_no_u = np.zeros(len(unicos), dtype=bool)
+    falla = np.zeros(len(unicos), dtype=bool)
+    for ini, limpio in _bloques(unicos):
+        vacio = (limpio == "").to_numpy(dtype=bool)
+        bajo = limpio.str.lower()
+        si = bajo.isin(_TRUE).to_numpy(dtype=bool)
+        no = bajo.isin(_FALSE).to_numpy(dtype=bool)
+        fin = ini + len(limpio)
+        es_si_u[ini:fin], es_no_u[ini:fin] = si, no
+        falla[ini:fin] = ~(si | no) & ~vacio
+    es_si, es_no = es_si_u[codigos], es_no_u[codigos]
     resultado = pd.array(np.where(es_si, True, False), dtype="boolean")
     resultado[~(es_si | es_no)] = pd.NA
     return ConversionResult(
         values=pd.Series(resultado, index=values.index),
-        failed=_fallidas(original, ~(es_si | es_no) & ~vacio),
+        failed=_fallidas(codigos, unicos, falla),
     )

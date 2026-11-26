@@ -145,3 +145,28 @@ def test_archivo_chico_xlsx(tmp_path, monkeypatch):
 
 def test_modulo_importable():
     assert memory.FACTOR_CSV == 6
+
+
+def test_memoria_del_resultado(monkeypatch):
+    from excel_tool.core.memory import BYTES_POR_CELDA_RESULTADO, check_result_memory
+
+    monkeypatch.setattr(pu, "available_memory", lambda: 1 * GB)
+    chico = check_result_memory(1000, 10)
+    assert chico.ok
+    assert chico.needed == 1000 * 10 * BYTES_POR_CELDA_RESULTADO
+    # 40 millones de celdas necesitan más que 0,8 GB
+    grande = check_result_memory(4_000_000, 10)
+    assert not grande.ok
+    assert grande.message.startswith("El resultado es muy grande")
+    assert "GB libres" in grande.message or "MB libres" in grande.message
+    # lo extra también cuenta
+    assert check_result_memory(1000, 10, extra_bytes=2 * GB).ok is False
+
+
+def test_memoria_del_resultado_desconocida(monkeypatch):
+    from excel_tool.core.memory import check_result_memory
+
+    monkeypatch.setattr(pu, "available_memory", lambda: None)
+    r = check_result_memory(10**9, 100)
+    assert r.ok
+    assert r.available is None

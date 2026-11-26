@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from excel_tool import platform_utils
 from excel_tool.core.errors import ExcelToolError
 from excel_tool.core.preferences import load_preferences, save_preferences
+from excel_tool.ui.desplazable import CuerpoDesplazable
 from excel_tool.ui.grilla import formatear_numero
 from excel_tool.ui.worker import MENSAJE_INESPERADO, run_in_background
 
@@ -201,22 +202,11 @@ class VentanaGuardar:
     # ------------------------------------------------------------------ armado
     def _armar(self) -> None:
         # Abajo, siempre a la vista: resultado y botones. Arriba, lo demás con desplazamiento.
-        self.pie = ttk.Frame(self.win, padding=(12, 0, 12, 10))
-        self.pie.pack(side="bottom", fill="x")
-        cuerpo_scroll = ttk.Frame(self.win)
-        cuerpo_scroll.pack(side="top", fill="both", expand=True)
-        self.lienzo = tk.Canvas(cuerpo_scroll, highlightthickness=0, borderwidth=0)
-        self.barra_v = ttk.Scrollbar(cuerpo_scroll, orient="vertical", command=self.lienzo.yview)
-        self.lienzo.configure(yscrollcommand=self.barra_v.set)
-        self.barra_v.pack(side="right", fill="y")
-        self.lienzo.pack(side="left", fill="both", expand=True)
-        marco = ttk.Frame(self.lienzo, padding=12)
-        self._id_marco = self.lienzo.create_window((0, 0), window=marco, anchor="nw")
-        marco.bind("<Configure>", self._al_cambiar_marco)
-        self.lienzo.bind("<Configure>", self._al_cambiar_lienzo)
-        self.lienzo.bind("<Enter>", self._activar_rueda)
-        self.lienzo.bind("<Leave>", self._desactivar_rueda)
-        self.marco = marco
+        self.cuerpo_desplazable = CuerpoDesplazable(self.win, alto_maximo=ALTO_MAXIMO_CUERPO)
+        self.pie = self.cuerpo_desplazable.pie
+        self.lienzo = self.cuerpo_desplazable.lienzo
+        self.barra_v = self.cuerpo_desplazable.barra_v
+        self.marco = marco = self.cuerpo_desplazable.marco
 
         # 1. Destino
         f1 = ttk.LabelFrame(marco, text="1. ¿Dónde vas a abrir el archivo?", padding=8)
@@ -335,40 +325,6 @@ class VentanaGuardar:
             self.f_resultado, text="Abrir carpeta", command=self._abrir_carpeta
         )
         self.btn_carpeta.pack(anchor="e", pady=(6, 0))
-
-    # --------------------------------------------------------- desplazamiento
-    def _al_cambiar_marco(self, _evento: object = None) -> None:
-        self.lienzo.configure(scrollregion=self.lienzo.bbox("all"))
-        alto = min(self.marco.winfo_reqheight(), ALTO_MAXIMO_CUERPO)
-        self.lienzo.configure(height=alto, width=self.marco.winfo_reqwidth())
-        hay_barra = self.marco.winfo_reqheight() > ALTO_MAXIMO_CUERPO
-        if hay_barra and not self.barra_v.winfo_ismapped():
-            self.barra_v.pack(side="right", fill="y", before=self.lienzo)
-        elif not hay_barra and self.barra_v.winfo_ismapped():
-            self.barra_v.pack_forget()
-
-    def _al_cambiar_lienzo(self, evento: tk.Event) -> None:
-        self.lienzo.itemconfigure(self._id_marco, width=evento.width)
-
-    def _activar_rueda(self, _evento: object = None) -> None:
-        self.win.bind_all("<MouseWheel>", self._rueda)
-        self.win.bind_all("<Button-4>", self._rueda)
-        self.win.bind_all("<Button-5>", self._rueda)
-
-    def _desactivar_rueda(self, _evento: object = None) -> None:
-        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            self.win.unbind_all(ev)
-
-    def _rueda(self, evento: tk.Event) -> None:
-        if not self.barra_v.winfo_ismapped():
-            return
-        if getattr(evento, "num", 0) == 4:
-            paso = -1
-        elif getattr(evento, "num", 0) == 5:
-            paso = 1
-        else:
-            paso = -1 if evento.delta > 0 else 1
-        self.lienzo.yview_scroll(paso, "units")
 
     def _radio(self, padre: tk.Misc, valor: str, texto: str) -> ttk.Radiobutton:
         return ttk.Radiobutton(
@@ -806,7 +762,7 @@ class VentanaGuardar:
         self._gen_a += 1
         self._gen_b += 1
         try:
-            self._desactivar_rueda()
+            self.cuerpo_desplazable.desactivar_rueda()
             self.win.destroy()
         except tk.TclError:
             pass
